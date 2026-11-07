@@ -1,0 +1,5 @@
+# Los scripts que corren dentro de contenedores Linux deben tener fin de linea LF,
+# aunque se editen en Windows (si no, bash falla con "\r: command not found").
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.py text eol=lf

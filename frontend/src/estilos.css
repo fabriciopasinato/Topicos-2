@@ -1,0 +1,212 @@
+:root {
+  --fondo: #f6f7f9;
+  --superficie: #ffffff;
+  --texto: #1d2330;
+  --tenue: #5d6675;
+  --borde: #dde1e7;
+  --primario: #3b5bdb;
+  --primario-texto: #ffffff;
+  --elegido: #2f9e44;
+  --error: #c92a2a;
+  --info: #1971c2;
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #14171d;
+    --superficie: #1d222b;
+    --texto: #e7eaf0;
+    --tenue: #9aa3b2;
+    --borde: #2e3541;
+    --primario: #5c7cfa;
+    --elegido: #40c057;
+    --error: #ff6b6b;
+    --info: #4dabf7;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  line-height: 1.5;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+a {
+  color: var(--primario);
+}
+
+.encabezado {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  background: var(--superficie);
+  border-bottom: 1px solid var(--borde);
+}
+
+.encabezado nav {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.marca {
+  font-weight: 700;
+  font-size: 1.15rem;
+  text-decoration: none;
+  color: var(--texto);
+}
+
+.tarjeta {
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+}
+
+.angosta {
+  max-width: 420px;
+  margin: 32px auto;
+}
+
+.tenue {
+  color: var(--tenue);
+}
+
+.grilla-eventos,
+.lista {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+.lista {
+  grid-template-columns: 1fr;
+}
+
+form {
+  display: grid;
+  gap: 12px;
+}
+
+label {
+  display: grid;
+  gap: 4px;
+  font-weight: 500;
+}
+
+input {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--borde);
+  border-radius: 6px;
+  background: var(--fondo);
+  color: var(--texto);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background: var(--primario);
+  color: var(--primario-texto);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.secundario {
+  background: transparent;
+  color: var(--texto);
+  border: 1px solid var(--borde);
+}
+
+button.enlace {
+  background: none;
+  color: var(--primario);
+  padding: 0;
+  text-decoration: underline;
+}
+
+.acciones {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.mensaje {
+  margin: 4px 0;
+}
+
+.mensaje-error {
+  color: var(--error);
+}
+
+.mensaje-info {
+  color: var(--info);
+}
+
+.cuenta-regresiva strong {
+  font-size: 1.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.mapa {
+  display: grid;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.fila {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.nombre-fila {
+  width: 1.5rem;
+  font-weight: 600;
+  color: var(--tenue);
+}
+
+.asiento {
+  min-width: 2.1rem;
+  padding: 4px 0;
+  background: var(--fondo);
+  color: var(--texto);
+  border: 1px solid var(--borde);
+  font-size: 0.85rem;
+}
+
+.asiento.elegido {
+  background: var(--elegido);
+  color: #fff;
+  border-color: var(--elegido);
+}
+
+.asiento:disabled {
+  background: var(--borde);
+  opacity: 0.6;
+}
