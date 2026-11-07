@@ -15,7 +15,7 @@ context: |
       que aplica solo sobre su base. Nunca modificar el esquema a mano: todo cambio de esquema es una migración.
     - Redis: desde la Etapa I para los contadores del rate limit; en la Etapa II se usa además como cache.
     - Colas: RabbitMQ (se incorpora en la Etapa III).
-
+ 
   Contenedores y red:
     - Un contenedor por componente: frontend, gateway, un contenedor por cada microservicio, postgres, y luego redis, rabbitmq y workers.
     - La base de datos nunca va dentro del contenedor de un servicio.
