@@ -1,0 +1,42 @@
+# Infraestructura SOLO para tests. Nunca se usa la base de desarrollo.
+#   docker compose -f docker-compose.test.yml up -d
+#
+# PostgreSQL corre en tmpfs (en memoria): se descarta al bajar el contenedor.
+# Crea auth_db_test, eventos_db_test, ventas_db_test y gateway_db_test con el mismo script
+# de inicializacion que produccion (DB_SUFFIX=_test).
+# Publica puertos distintos a los de desarrollo para no chocar.
+
+name: ticketera-test
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_test
+      DB_SUFFIX: _test
+      AUTH_DB_PASSWORD: auth_test
+      EVENTOS_DB_PASSWORD: eventos_test
+      VENTAS_DB_PASSWORD: ventas_test
+      GATEWAY_DB_PASSWORD: gateway_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./docker/postgres:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
