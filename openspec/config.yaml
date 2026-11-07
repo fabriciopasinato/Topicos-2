@@ -1,0 +1,101 @@
+schema: spec-driven
+
+context: |
+  Trabajo final de Tópicos II (UNLP). Plataforma ticketera de eventos.
+  Escribir todos los artefactos en español.
+  Roles: administrador, event owner, cliente.
+
+  Stack definido:
+    - Entorno Docker + Docker Compose.
+    - Backend: FastAPI (Python 3.12). Cada microservicio es una app FastAPI independiente con su propio Dockerfile.
+    - Frontend: React 19.3.
+    - Base de datos: PostgreSQL.
+    - ORM: SQLAlchemy 2.x. Migraciones: Alembic.
+      Cada microservicio tiene sus propios modelos y su propia carpeta de migraciones Alembic,
+      que aplica solo sobre su base. Nunca modificar el esquema a mano: todo cambio de esquema es una migración.
+    - Redis: desde la Etapa I para los contadores del rate limit; en la Etapa II se usa además como cache.
+    - Colas: RabbitMQ (se incorpora en la Etapa III).
+
+  Contenedores y red:
+    - Un contenedor por componente: frontend, gateway, un contenedor por cada microservicio, postgres, y luego redis, rabbitmq y workers.
+    - La base de datos nunca va dentro del contenedor de un servicio.
+    - Un único contenedor postgres con una base y un usuario por microservicio (auth_db, eventos_db, ventas_db).
+    - Redis y RabbitMQ van en contenedores propios; los servicios son clientes que se conectan por la red interna.
+    - Los workers que consumen colas son contenedores separados.
+    - Todos los contenedores se comunican por la red interna de Compose usando el nombre del servicio (ej: postgres:5432).
+    - Solo frontend y gateway exponen puertos al host (desde la Etapa III, nginx en lugar del gateway).
+    - Configuración por variables de entorno (.env); nunca credenciales en el código.
+    - Cada servicio expone un endpoint /health, usado por el healthcheck de Docker.
+    - Todos los servicios usan restart: unless-stopped para recuperarse solos ante una caída.
+
+  Arquitectura de microservicios:
+    - Definir límites de servicios, comunicación sync/async, fallos parciales, consistencia eventual y despliegue independiente.
+    - Microservicios iniciales: gateway, auth (usuarios y roles), eventos, ventas (tickets y compras).
+    - Cada microservicio es dueño de sus datos y solo accede a su propia base.
+      Para obtener datos de otro servicio se usa su API (sync) o mensajes (async), nunca su base.
+    - El gateway es el único punto de entrada del frontend y valida la autenticación.
+
+  Alta disponibilidad del gateway:
+    - El gateway es stateless, para poder correr varias réplicas sin punto único de falla:
+      - Autenticación con JWT: cualquier instancia valida el token sin guardar sesiones.
+      - Contadores de rate limit en Redis, compartidos entre instancias.
+      - La bitácora se persiste en la base, nunca en archivos locales del contenedor.
+    - Desde la Etapa III, nginx actúa como balanceador frente a varias réplicas del gateway
+      (docker compose --scale gateway=N): reparte las peticiones, saca de rotación
+      las instancias caídas y reintenta en otra.
+    - Con nginx adelante, la IP real del cliente llega en X-Forwarded-For.
+      El gateway confía en ese header solo si la petición proviene de nginx,
+      para que no se pueda falsificar y evadir el rate limit.
+    - El balanceador es un punto único de falla aceptado para el TP; documentar en el design
+      cómo se resolvería en producción (nginx redundante).
+
+  Etapas (un change de OpenSpec por etapa):
+    I: Arquitectura base + core.
+       Arquitectura base: docker-compose, Dockerfiles y red interna para front, gateway, microservicios y base.
+       Core: APIs, autenticación, gestión de eventos, compra de tickets (numerados y por zona), mockups.
+    II: Sistema de recomendación y cache.
+    III: Colas de venta, devoluciones, búsqueda avanzada, balanceo de varias réplicas del gateway con nginx
+         y stress test (incluyendo la caída de una instancia del gateway bajo carga).
+
+  Testing:
+    - Backend: pytest.
+      - Tests unitarios de la lógica de negocio de cada microservicio.
+      - Tests de integración con FastAPI TestClient contra una base PostgreSQL de test
+        (nunca contra la base de desarrollo), con rollback por test mediante una fixture en conftest.py,
+        para que cada test arranque con la base limpia.
+    - Frontend: Vitest + Testing Library.
+      - Mock Service Worker (MSW) para simular la API; los tests del front no dependen del backend real.
+    - Toda PR con código trae sus tests, y todos los tests corren en CI (GitHub Actions) en cada PR.
+
+  Flujo de trabajo con GitHub:
+    - Ramas permanentes: main (versión estable/entregable) y dev (integración).
+    - Nunca se hace push directo a main ni a dev.
+    - Todo trabajo parte de dev en una rama propia (feature/<nombre>, fix/<nombre>) y vuelve por PR a dev.
+    - La única rama que puede abrir PR a main es dev, y solo cuando dev está estable.
+    - Cada change de OpenSpec se trabaja en su rama feature/<change> creada desde dev.
+    - Los PR deben tener los tests pasando (CI con GitHub Actions) antes del merge.
+    - Al proponer tareas o comandos git, respetar siempre este flujo.
+
+  Requisitos transversales:
+    - Toda solicitud HTTP se registra en una bitácora: el gateway inicia el timer al recibirla,
+      procesa la autenticación, registra el resultado y el tiempo, y retorna la respuesta.
+    - Un ticket nunca puede venderse dos veces (claves de idempotencia + control de concurrencia).
+    - Rate limit por IP en el gateway, para evitar abuso y ataques HTTP:
+      - Se aplica antes de llamar a cualquier microservicio.
+      - Al superar el límite responde 429 Too Many Requests con el header Retry-After.
+      - Límites más estrictos en login/registro y en compra de tickets que en consultas de eventos.
+      - Los contadores se guardan en Redis (no en memoria), para que funcione con varias instancias del gateway.
+      - Las solicitudes rechazadas por rate limit también se registran en la bitácora.
+      - Los límites son configurables por variables de entorno.(por defecto 100 peticiones misma ip por minuto)
+
+rules:
+  specs:
+    - Cada requirement debe tener al menos un escenario WHEN/THEN
+    - Incluir escenarios de concurrencia cuando aplique
+  design:
+    - Indicar para cada comunicación entre servicios si es sync (HTTP) o async (cola)
+  tasks:
+    - Toda tarea que agrega o cambia código incluye sus tests (unitarios y, si toca la API o la base, de integración)
+    - Incluir una tarea para configurar el CI que corra los tests de backend y frontend en cada PR
+    - En la Etapa I, las primeras tareas son el docker-compose, los Dockerfiles y la red interna
+    - Todo cambio de modelo de datos incluye su tarea de migración Alembic
