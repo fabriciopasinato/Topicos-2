@@ -90,12 +90,12 @@ context: |
 
 rules:
   specs:
-    - Cada requirement debe tener al menos un escenario WHEN/THEN
-    - Incluir escenarios de concurrencia cuando aplique
+    - Cada requirement debe tener al menos un escenario WHEN/THEN.
+    - Incluir escenarios de concurrencia cuando aplique.
   design:
-    - Indicar para cada comunicación entre servicios si es sync (HTTP) o async (cola)
+    - Indicar para cada comunicación entre servicios si es sync (HTTP) o async (cola).
   tasks:
-    - Toda tarea que agrega o cambia código incluye sus tests (unitarios y, si toca la API o la base, de integración)
-    - Incluir una tarea para configurar el CI que corra los tests de backend y frontend en cada PR
-    - En la Etapa I, las primeras tareas son el docker-compose, los Dockerfiles y la red interna
-    - Todo cambio de modelo de datos incluye su tarea de migración Alembic
+    - Toda tarea que agrega o cambia código incluye sus tests (unitarios y, si toca la API o la base, de integración).
+    - Incluir una tarea para configurar el CI que corra los tests de backend y frontend en cada PR.
+    - En la Etapa I, las primeras tareas son el docker-compose, los Dockerfiles y la red interna.
+    - Todo cambio de modelo de datos incluye su tarea de migración Alembic.
