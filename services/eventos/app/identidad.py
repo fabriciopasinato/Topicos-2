@@ -1,0 +1,46 @@
+"""Identidad del usuario, tal como la envia el gateway (X-User-Id / X-User-Role).
+
+El servicio solo es alcanzable desde la red interna y el gateway descarta esos
+headers si vienen del cliente, por eso aca se confia en ellos.
+"""
+
+from dataclasses import dataclass
+
+from fastapi import Depends, Header, HTTPException
+
+ROL_ADMINISTRADOR = "administrador"
+ROL_EVENT_OWNER = "event_owner"
+
+
+@dataclass(frozen=True)
+class Identidad:
+    user_id: int
+    rol: str
+
+    @property
+    def es_admin(self) -> bool:
+        return self.rol == ROL_ADMINISTRADOR
+
+
+def identidad_opcional(
+    x_user_id: str | None = Header(default=None),
+    x_user_role: str | None = Header(default=None),
+) -> Identidad | None:
+    if not x_user_id or not x_user_role:
+        return None
+    return Identidad(user_id=int(x_user_id), rol=x_user_role)
+
+
+def identidad_actual(identidad: Identidad | None = Depends(identidad_opcional)) -> Identidad:
+    if identidad is None:
+        raise HTTPException(status_code=401, detail="se requiere autenticacion")
+    return identidad
+
+
+def requiere_rol(*roles: str):
+    def _verificar(identidad: Identidad = Depends(identidad_actual)) -> Identidad:
+        if identidad.rol not in roles:
+            raise HTTPException(status_code=403, detail="operacion no permitida para este rol")
+        return identidad
+
+    return _verificar

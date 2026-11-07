@@ -104,9 +104,13 @@ El gateway es FastAPI con un middleware único que aplica los pasos en este orde
 2. Se eliminan `X-User-Id` y `X-User-Role` de la solicitud entrante.
 3. Rate limit (decisión 7). Si excede: 429.
 4. Si hay `Authorization: Bearer`, se valida el JWT localmente (HS256, `JWT_SECRET` compartido con auth, verificando `exp`). Token inválido: 401. Rutas protegidas sin token: 401.
-5. Se reenvía al servicio según el prefijo (`/api/auth` -> auth, `/api/eventos` -> eventos, `/api/ventas` -> ventas), agregando `X-User-Id` y `X-User-Role` si hay token. Las rutas `/internal/*` de los servicios no tienen prefijo público y no se reenvían.
+5. Se reenvía al servicio según el prefijo, quitando solo `/api`: `/api/auth/login` -> `auth:8001/auth/login`, `/api/eventos/5` -> `eventos:8002/eventos/5`, `/api/ventas/reservas` -> `ventas:8003/ventas/reservas`. Se agregan `X-User-Id` y `X-User-Role` si hay token, y no se reenvía el header `Authorization`. Cada servicio expone sus rutas públicas bajo su propio prefijo; las rutas `/internal/*` quedan fuera de ese prefijo y por eso nunca se reenvían.
 6. Se registra en la bitácora (decisión 8).
 7. Se devuelve la respuesta.
+
+Son rutas públicas (sin token): login, registro y refresh; los `GET` de `/api/eventos/*`; y la disponibilidad `GET /api/ventas/eventos/{id}/disponibilidad`. Todo lo demás bajo `/api/` exige token. Si una ruta pública llega con un token inválido, también se responde 401.
+
+`GET /health` del gateway es un endpoint de infraestructura que Docker consulta cada 5 s. No pasa por rate limit ni se registra en la bitácora, para no llenarla con chequeos internos. Todas las solicitudes de clientes sí se registran.
 
 Los servicios confían en `X-User-Id` / `X-User-Role` porque solo son alcanzables desde la red interna, y el gateway garantiza que esos headers nunca vienen del cliente. El gateway configura CORS para el origen del frontend (`CORS_ORIGINS`).
 
@@ -152,8 +156,8 @@ Eventos guarda la definición (recintos, sectores, zonas, asientos, precios) en 
 
 Modelo de `ventas_db`:
 - `tickets(id, evento_id, zona_id, tipo_zona, fila, numero, precio, estado, reserva_id, reservado_hasta, orden_id)`. `estado` toma los valores `disponible`, `reservado` o `vendido`. Hay un índice único parcial sobre `(evento_id, zona_id, fila, numero)` para los numerados y un índice `(zona_id, estado)` para buscar disponibles en las zonas generales.
-- `reservas(id, user_id, evento_id, hasta, estado, orden_id)`. `estado` toma los valores `activa`, `pagada` o `cancelada`; "vencida" no se guarda, se deduce de `hasta < now()`.
-- `ordenes`, `orden_items`, `idempotency_keys(user_id, key, request_hash, reserva_id, UNIQUE(user_id, key))`.
+- `reservas(id, user_id, evento_id, cantidad, hasta, estado)`. `estado` toma los valores `activa`, `pagada` o `cancelada`; "vencida" no se guarda, se deduce de `hasta < now()`. `cantidad` permite verificar al pagar que siguen siendo suyos todos los tickets.
+- `ordenes(id, user_id, reserva_id UNIQUE, total)`: la orden apunta a su reserva, sin referencia circular. Además `orden_items` e `idempotency_keys(user_id, key, request_hash, reserva_id, UNIQUE(user_id, key))`.
 
 Las zonas generales usan un ticket por entrada, sin fila ni número, en lugar de un contador de cupos. Así el vencimiento de reservas funciona igual para todas las zonas. Una zona de 5000 entradas son 5000 filas, un volumen trivial para PostgreSQL.
 

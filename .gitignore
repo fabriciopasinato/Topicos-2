@@ -1,0 +1,22 @@
+# Entorno local (credenciales)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / frontend
+node_modules/
+dist/
+coverage/
+
+# Editores / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

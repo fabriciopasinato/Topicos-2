@@ -1,0 +1,145 @@
+# Ticketera - Etapa I
+# Levantar todo:  docker compose up -d   (crea lo que falta, reutiliza lo existente)
+#
+# Una sola red interna. Solo gateway y frontend publican puertos al host:
+# postgres, redis y los microservicios son accesibles unicamente por nombre
+# dentro de la red (postgres:5432, auth:8001, ...).
+#
+# Orden de arranque (por healthchecks):
+#   postgres, redis -> auth, eventos, ventas -> gateway -> frontend
+# Los microservicios NO dependen entre si.
+
+name: ticketera
+
+x-healthcheck-defaults: &healthcheck-defaults
+  interval: 5s
+  timeout: 3s
+  retries: 10
+  start_period: 10s
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
+      EVENTOS_DB_PASSWORD: ${EVENTOS_DB_PASSWORD}
+      VENTAS_DB_PASSWORD: ${VENTAS_DB_PASSWORD}
+      GATEWAY_DB_PASSWORD: ${GATEWAY_DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Solo corre con el volumen vacio (primer arranque).
+      - ./docker/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d postgres"]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "redis-cli", "ping"]
+
+  auth:
+    build: ./services/auth
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://auth:${AUTH_DB_PASSWORD}@postgres:5432/auth_db
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TTL_MINUTES: ${JWT_ACCESS_TTL_MINUTES}
+      JWT_REFRESH_TTL_DAYS: ${JWT_REFRESH_TTL_DAYS}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)"]
+
+  eventos:
+    build: ./services/eventos
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://eventos:${EVENTOS_DB_PASSWORD}@postgres:5432/eventos_db
+      VENTAS_URL: http://ventas:8003
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=3)"]
+
+  ventas:
+    build: ./services/ventas
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://ventas:${VENTAS_DB_PASSWORD}@postgres:5432/ventas_db
+      RESERVA_TTL_MINUTES: ${RESERVA_TTL_MINUTES}
+      RESERVA_MAX_TICKETS: ${RESERVA_MAX_TICKETS}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health', timeout=3)"]
+
+  gateway:
+    build: ./gateway
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://gateway:${GATEWAY_DB_PASSWORD}@postgres:5432/gateway_db
+      REDIS_URL: redis://redis:6379/0
+      AUTH_URL: http://auth:8001
+      EVENTOS_URL: http://eventos:8002
+      VENTAS_URL: http://ventas:8003
+      JWT_SECRET: ${JWT_SECRET}
+      RATE_LIMIT_AUTH: ${RATE_LIMIT_AUTH}
+      RATE_LIMIT_COMPRA: ${RATE_LIMIT_COMPRA}
+      RATE_LIMIT_GENERAL: ${RATE_LIMIT_GENERAL}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+      eventos:
+        condition: service_healthy
+      ventas:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL}
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+
+networks:
+  default:
+    name: ticketera_net
+
+volumes:
+  postgres_data:
+  redis_data:
