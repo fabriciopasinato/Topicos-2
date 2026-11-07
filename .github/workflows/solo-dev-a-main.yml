@@ -1,0 +1,19 @@
+name: Solo dev puede hacer PR a main
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  verificar-rama-origen:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar que el PR venga de dev
+        env:
+          RAMA_ORIGEN: ${{ github.head_ref }}
+        run: |
+          if [ "$RAMA_ORIGEN" != "dev" ]; then
+            echo "::error::Solo la rama dev puede hacer PR a main (este PR viene de '$RAMA_ORIGEN')"
+            exit 1
+          fi
+          echo "OK: el PR viene de dev"
