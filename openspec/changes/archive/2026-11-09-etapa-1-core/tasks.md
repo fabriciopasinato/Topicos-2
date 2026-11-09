@@ -14,7 +14,7 @@ Los grupos 1 a 3 son la base común y van primero. Desde el grupo 4 en adelante,
 
 ## 2. Integración continua
 
-- [ ] 2.1 Crear `.github/workflows/tests.yml`, que corre en todo `pull_request` (a `dev` y a `main`): un job por servicio backend con PostgreSQL como service container y `pytest`, un job de frontend con `npm ci` y `vitest run`, y un job con `docker compose config`. Mantener `solo-dev-a-main.yml` sin cambios. Verificar abriendo un PR de prueba a `dev` y comprobando que todos los jobs corren y pasan.
+- [x] 2.1 Crear `.github/workflows/tests.yml`, que corre en todo `pull_request` (a `dev` y a `main`): un job por servicio backend con PostgreSQL como service container y `pytest`, un job de frontend con `npm ci` y `vitest run`, y un job con `docker compose config`. Mantener `solo-dev-a-main.yml` sin cambios. Verificar abriendo un PR de prueba a `dev` y comprobando que todos los jobs corren y pasan.
 
 ## 3. Infraestructura de tests compartida
 
