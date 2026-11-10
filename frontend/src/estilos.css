@@ -210,3 +210,79 @@ button.enlace {
   background: var(--borde);
   opacity: 0.6;
 }
+
+fieldset {
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  padding: 12px 16px 16px;
+  margin: 0 0 16px;
+}
+
+legend {
+  font-weight: 600;
+  padding: 0 6px;
+}
+
+.grilla-campos {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+select {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--borde);
+  border-radius: 6px;
+  background: var(--fondo);
+  color: var(--texto);
+}
+
+input[aria-invalid="true"],
+select[aria-invalid="true"] {
+  border-color: var(--error);
+}
+
+.datos-fijos {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0 0 20px;
+}
+
+.datos-fijos dt {
+  color: var(--tenue);
+}
+
+.datos-fijos dd {
+  margin: 0;
+}
+
+.filtros {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.tabla {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--superficie);
+  display: block;
+  overflow-x: auto;
+}
+
+.tabla th,
+.tabla td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--borde);
+  white-space: nowrap;
+}
+
+.campo {
+  display: grid;
+  gap: 4px;
+}

@@ -25,11 +25,24 @@ let renovacionEnCurso = null;
 const suscriptores = new Set();
 
 export class ApiError extends Error {
-  constructor(status, detail, retryAfter) {
+  constructor(status, detail, retryAfter, codigo = null) {
     super(typeof detail === "string" ? detail : `Error ${status}`);
     this.status = status;
     this.detail = detail;
     this.retryAfter = retryAfter;
+    // Codigo de negocio (por ejemplo "cuenta_bloqueada") para no parsear texto.
+    this.codigo = codigo;
+  }
+
+  /** Errores de validacion por campo: { campo: "mensaje" }. */
+  get errores() {
+    if (!Array.isArray(this.detail)) return {};
+    const porCampo = {};
+    for (const e of this.detail) {
+      const campo = e.loc?.[e.loc.length - 1];
+      if (campo && !porCampo[campo]) porCampo[campo] = e.msg.replace(/^Value error, /, "");
+    }
+    return porCampo;
   }
 }
 
@@ -37,7 +50,8 @@ export function tokensActuales() {
   return tokens;
 }
 
-export function guardarTokens(nuevos) {
+/** `motivo` (opcional) explica por que se cerro la sesion, para avisarlo. */
+export function guardarTokens(nuevos, motivo = null) {
   tokens = nuevos ? { access: nuevos.access_token, refresh: nuevos.refresh_token } : null;
   try {
     if (tokens) localStorage.setItem(CLAVE, JSON.stringify(tokens));
@@ -45,11 +59,11 @@ export function guardarTokens(nuevos) {
   } catch {
     /* sin almacenamiento: la sesión dura lo que la pestaña */
   }
-  suscriptores.forEach((fn) => fn(tokens));
+  suscriptores.forEach((fn) => fn(tokens, motivo));
 }
 
-export function borrarTokens() {
-  guardarTokens(null);
+export function borrarTokens(motivo = null) {
+  guardarTokens(null, motivo);
 }
 
 export function suscribirTokens(fn) {
@@ -101,20 +115,22 @@ export async function api(ruta, opciones = {}) {
     if (await renovar()) {
       r = await enviar(ruta, opciones);
     } else {
-      borrarTokens();
+      // El motivo viaja con el cierre: las rutas protegidas redirigen al login
+      // mostrando el aviso aunque se adelanten a la navegacion de alFallarAuth.
+      borrarTokens("sesion_cerrada");
       alFallarAuth();
     }
   }
 
   if (!r.ok) {
-    let detail = null;
+    let cuerpo = {};
     try {
-      detail = (await r.json()).detail;
+      cuerpo = await r.json();
     } catch {
       /* respuesta sin cuerpo JSON */
     }
     const retry = r.headers.get("Retry-After");
-    throw new ApiError(r.status, detail, retry ? Number(retry) : null);
+    throw new ApiError(r.status, cuerpo.detail ?? null, retry ? Number(retry) : null, cuerpo.codigo ?? null);
   }
   return r.status === 204 ? null : r.json();
 }
@@ -126,5 +142,7 @@ export function mensajeDeError(error, porStatus = {}) {
     return `Demasiados intentos. Probá de nuevo en ${error.retryAfter ?? 60} segundos.`;
   }
   if (porStatus[error.status]) return porStatus[error.status];
-  return typeof error.detail === "string" ? error.detail : `Error ${error.status}`;
+  if (typeof error.detail === "string") return error.detail;
+  if (error.status === 422) return "Revisá los datos marcados.";
+  return `Error ${error.status}`;
 }

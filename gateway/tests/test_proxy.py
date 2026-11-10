@@ -48,3 +48,24 @@ def test_cors_permite_el_origen_del_frontend(crear_gateway):
     )
     assert r.status_code == 200
     assert r.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+ORIGEN = {"Origin": "http://localhost:3000"}
+
+
+def test_los_401_del_gateway_llevan_headers_cors(crear_gateway):
+    """Si no los llevan, el navegador bloquea la respuesta y el frontend no
+    puede renovar el token ni mostrar el motivo."""
+    client = crear_gateway(cors_origins="http://localhost:3000")
+    r = client.get("/api/ventas/compras", headers={**ORIGEN, "Authorization": f"Bearer {token(minutos=-1)}"})
+    assert r.status_code == 401
+    assert r.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_los_429_llevan_cors_y_exponen_retry_after(crear_gateway):
+    client = crear_gateway(cors_origins="http://localhost:3000", rate_limit_auth=1)
+    client.post("/api/auth/login", json={}, headers=ORIGEN)
+    r = client.post("/api/auth/login", json={}, headers=ORIGEN)
+    assert r.status_code == 429
+    assert r.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert "retry-after" in r.headers["access-control-expose-headers"].lower()

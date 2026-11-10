@@ -12,7 +12,8 @@ Trabajo final de Tópicos II (UNLP). Plataforma de venta de entradas con arquite
 | `eventos` | Eventos, recintos y zonas | (solo red interna, 8002) |
 | `ventas` | Inventario, reservas y compras | (solo red interna, 8003) |
 | `postgres` | Una base y un usuario por servicio | (solo red interna, 5432) |
-| `redis` | Contadores del rate limit | (solo red interna, 6379) |
+| `redis` | Contadores del rate limit y revocación de sesiones | (solo red interna, 6379) |
+| `mailpit` | Servidor de email **de desarrollo**: recibe los emails y no los entrega a nadie | (solo red interna, 1025 y 8025) |
 
 Solo `frontend` y `gateway` publican puertos. El resto se accede por nombre dentro de la red de Compose (`postgres:5432`, `auth:8001`, ...).
 
@@ -48,6 +49,78 @@ Con eso:
 | Empezar de cero | `docker compose down -v` | **Se borran** (bases y Redis) |
 | Ver el estado | `docker compose ps` | - |
 | Ver los logs de un servicio | `docker compose logs -f ventas` | - |
+
+## Emails (verificación y recuperación de cuenta)
+
+Auth envía emails para verificar la cuenta, restablecer la contraseña y avisar bloqueos. En desarrollo van al contenedor `mailpit`, que **no los entrega a nadie** y, como el resto de los servicios internos, **no publica puertos**: la bandeja no es accesible desde otras máquinas de tu red (los emails tienen links de restablecimiento).
+
+### Cómo controlar los emails
+
+Mailpit es un **buzón de pruebas**: guarda todos los emails que manda el sistema (a cualquier destinatario) y no los entrega a nadie. Hay dos formas de mirarlo. En ambas, el stack tiene que estar levantado (`docker compose up -d`).
+
+**Opción A: en el navegador** (la más cómoda, ideal para la defensa)
+
+1. En una terminal, abrí un túnel temporal que escucha **solo en tu máquina**:
+
+   ```bash
+   docker run --rm --network ticketera_net -p 127.0.0.1:8025:8025 alpine/socat TCP-LISTEN:8025,fork TCP:mailpit:8025
+   ```
+
+2. Dejá esa terminal abierta y entrá a http://localhost:8025. Vas a ver la bandeja con todos los emails: hacé click en uno para leerlo y abrir su link.
+3. Cuando termines, cortá el túnel con **Ctrl+C**. Mientras está abierto no es accesible desde otras máquinas de la red.
+
+**Opción B: por consola** (sin abrir nada)
+
+Listar todos los emails (fecha, destinatario y asunto):
+
+```bash
+docker compose exec auth python -c "import urllib.request,json; [print(m['Created'][:19], '|', m['To'][0]['Address'], '|', m['Subject']) for m in json.load(urllib.request.urlopen('http://mailpit:8025/api/v1/messages'))['messages']]"
+```
+
+Leer el último email completo (con el link para verificar o restablecer):
+
+```bash
+docker compose exec auth python -c "import urllib.request,json; print(json.load(urllib.request.urlopen('http://mailpit:8025/api/v1/message/latest'))['Text'])"
+```
+
+Ver solo los emails de un usuario (cambiá el email al final de la URL):
+
+```bash
+docker compose exec auth python -c "import urllib.request,json; [print(m['Created'][:19], '|', m['Subject']) for m in json.load(urllib.request.urlopen('http://mailpit:8025/api/v1/search?query=to:ana@example.com'))['messages']]"
+```
+
+Vaciar la bandeja:
+
+```bash
+docker compose exec auth python -c "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://mailpit:8025/api/v1/messages', method='DELETE')); print('bandeja vacia')"
+```
+
+Mailpit no guarda los emails en disco: **al reiniciar Docker o el contenedor, la bandeja queda vacía**. Si "leer el último" da `HTTP Error 404`, es porque no hay ningún email.
+
+Los links de los emails vencen: el de verificación a las 24 horas y el de restablecimiento a los 30 minutos (y solo sirve el último pedido). Si venció, pedí otro desde la app ("Reenviar email de verificación" en el login, o "Olvidé mi contraseña").
+
+**¿Llegó o no llegó?** Si un email no aparece en la bandeja, mirá los logs de auth: los envíos fallidos quedan registrados.
+
+```bash
+docker compose logs auth | grep "no se pudo enviar"
+```
+
+**Si ya tenías un `.env`** de antes, agregale las variables nuevas de `.env.example`: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_TLS`, `EMAIL_FROM` y `FRONTEND_URL` (con los valores de ejemplo funciona con Mailpit).
+
+**Recibir los emails de verdad (opcional).** Mailpit es un buzón de pruebas: los emails existen, pero no llegan a la casilla real del destinatario. Si querés que lleguen (por ejemplo, para la defensa), apuntá auth a un SMTP real **solo en tu `.env`**, sin tocar código ni el compose. Con Gmail:
+
+```
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_TLS=true
+SMTP_USER=tu-cuenta@gmail.com
+SMTP_PASSWORD=contraseña de aplicación de Google (no tu contraseña normal)
+EMAIL_FROM=tu-cuenta@gmail.com
+```
+
+La contraseña de aplicación se genera en tu cuenta de Google (Seguridad > Contraseñas de aplicaciones) y requiere la verificación en dos pasos. Después: `docker compose up -d auth`. Para volver a Mailpit, restaurá `SMTP_HOST=mailpit`, `SMTP_PORT=1025` y `SMTP_TLS=false`. Ojo: con SMTP real los emails salen de verdad, así que probá con direcciones propias. Gmail limita los envíos diarios.
+
+**Producción:** no se usa Mailpit. Se cambian las variables `SMTP_*` por las de un proveedor (por ejemplo `SMTP_HOST=smtp.sendgrid.net`, `SMTP_PORT=587`, `SMTP_TLS=true`, usuario y contraseña) y `FRONTEND_URL` por la URL pública. No hay que tocar código.
 
 ## Bases de datos y migraciones
 

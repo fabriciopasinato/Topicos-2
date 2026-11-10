@@ -14,24 +14,38 @@ export function usuarioDeToken(token) {
 
 const SesionContext = createContext(null);
 
+export const AVISO_SESION_CERRADA = "Tu sesión se cerró. Volvé a ingresar.";
+
 export function SesionProvider({ children }) {
   const [usuario, setUsuario] = useState(() => {
     const t = tokensActuales();
     return t ? usuarioDeToken(t.access) : null;
   });
 
+  // Aviso a mostrar en el login cuando el servidor cerro la sesion (revocada o vencida).
+  const [avisoCierre, setAvisoCierre] = useState(null);
+
   useEffect(
-    () => suscribirTokens((t) => setUsuario(t ? usuarioDeToken(t.access) : null)),
+    () =>
+      suscribirTokens((t, motivo) => {
+        setUsuario(t ? usuarioDeToken(t.access) : null);
+        setAvisoCierre(!t && motivo === "sesion_cerrada" ? AVISO_SESION_CERRADA : null);
+      }),
     [],
   );
 
   const valor = {
     usuario,
+    avisoCierre,
     async login(email, password) {
       guardarTokens(await api("/api/auth/login", { method: "POST", body: { email, password } }));
     },
-    registrar(email, password) {
-      return api("/api/auth/registro", { method: "POST", body: { email, password } });
+    registrar(datos) {
+      return api("/api/auth/registro", { method: "POST", body: datos });
+    },
+    /** Guarda el par de tokens nuevo (por ejemplo, tras cambiar la contrasenia). */
+    renovarSesion(tokens) {
+      guardarTokens(tokens);
     },
     logout() {
       borrarTokens();

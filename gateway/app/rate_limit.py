@@ -9,10 +9,12 @@ import math
 import time
 
 from app.config import Settings
+from app.seguridad import RUTAS_PUBLICAS_AUTH
 
 VENTANA_SEGUNDOS = 60
 
-_RUTAS_AUTH = {"/api/auth/login", "/api/auth/registro", "/api/auth/refresh"}
+# Login, registro, refresh y recuperacion de cuenta comparten el limite estricto.
+_RUTAS_AUTH = set(RUTAS_PUBLICAS_AUTH)
 
 
 def grupo_de(metodo: str, ruta: str) -> str:

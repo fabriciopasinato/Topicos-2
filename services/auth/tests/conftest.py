@@ -40,15 +40,42 @@ except RuntimeError as error:
 # La app lee DATABASE_URL: se fija ANTES de importarla.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ.setdefault("JWT_SECRET", "secreto-de-test")
+# Redis de docker-compose.test.yml (base 1, para no chocar con los tests del gateway).
+TEST_REDIS_URL = os.environ.get("TEST_REDIS_URL_AUTH", "redis://localhost:6380/1")
+os.environ["REDIS_URL"] = TEST_REDIS_URL
 
+import redis  # noqa: E402
 from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
+from app import revocacion  # noqa: E402
+from app.correo import EnviadorFalso, get_enviador  # noqa: E402
 from app.db import Base, get_engine, get_session  # noqa: E402
 from app.main import app  # noqa: E402
+
+# Datos de registro validos, reutilizables en todos los tests.
+DATOS_REGISTRO = {
+    "email": "ana@example.com",
+    "password": "tortuga-azul-42",
+    "nombre": "Ana",
+    "apellido": "Pérez",
+    "dni": "30123456",
+    "fecha_nacimiento": "1990-05-17",
+    "telefono": "+54 221 555-1234",
+    "calle": "Calle 7",
+    "numero": "1234",
+    "piso_depto": "3B",
+    "localidad": "La Plata",
+    "provincia": "Buenos Aires",
+    "codigo_postal": "1900",
+}
+
+
+def datos_registro(**cambios) -> dict:
+    return {**DATOS_REGISTRO, **cambios}
 
 
 def _alembic_config() -> Config:
@@ -86,18 +113,57 @@ def db_session(engine):
 
 
 @pytest.fixture
-def client(db_session):
-    """TestClient cuya sesion de base es la del test (con rollback)."""
+def enviador() -> EnviadorFalso:
+    """Reemplaza al SMTP: los emails quedan en enviador.enviados."""
+    return EnviadorFalso()
+
+
+@pytest.fixture
+def redis_test():
+    cliente = redis.from_url(TEST_REDIS_URL)
+    cliente.flushdb()
+    yield cliente
+    cliente.flushdb()
+    cliente.close()
+
+
+@pytest.fixture
+def client(db_session, enviador, redis_test):
+    """TestClient cuya sesion de base es la del test (con rollback), con el
+    enviador de emails falso y el Redis de test."""
 
     def sesion_de_test():
         yield db_session
 
     app.dependency_overrides[get_session] = sesion_de_test
+    app.dependency_overrides[get_enviador] = lambda: enviador
+    app.dependency_overrides[revocacion.get_redis] = lambda: redis_test
     try:
         with TestClient(app) as c:
             yield c
     finally:
         app.dependency_overrides.clear()
+
+
+def token_del_email(email) -> str:
+    """Extrae el token del link que viene en un email."""
+    return email.cuerpo.split("token=")[1].split()[0]
+
+
+def activar(db_session, email: str = DATOS_REGISTRO["email"]) -> None:
+    db_session.execute(text("UPDATE users SET estado = 'activa' WHERE email = :e"), {"e": email})
+
+
+@pytest.fixture
+def cliente_activo(client, db_session):
+    """Un cliente registrado y con el email ya verificado."""
+    assert client.post("/auth/registro", json=DATOS_REGISTRO).status_code == 201
+    activar(db_session)
+    return DATOS_REGISTRO
+
+
+def login(client, email: str = DATOS_REGISTRO["email"], password: str = DATOS_REGISTRO["password"]):
+    return client.post("/auth/login", json={"email": email, "password": password})
 
 
 @pytest.fixture

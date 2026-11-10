@@ -101,6 +101,7 @@ Una sola función `validar_contrasenia(contrasenia, email)` usada por registro, 
 
 - longitud entre 10 y 128 (el máximo evita que alguien haga hashear textos enormes);
 - no figura en `app/data/contrasenias_comunes.txt` (las 10.000 más comunes de SecLists, licencia MIT), comparando en minúsculas; se carga una vez en un `frozenset`;
+- tampoco su **palabra base**: se le quitan los números y símbolos del final y se vuelve a buscar (`password123` → `password`, `dragon2024!` → `dragon`). Hace falta porque, con un mínimo de 10 caracteres, solo 51 de las 10.000 entradas tienen ese largo: el resto ya lo rechaza la longitud, y las variantes "palabra común + números" son justamente las que quedarían pasando;
 - distinta del email, sin distinguir mayúsculas;
 - sin reglas de composición (mayúscula, número, símbolo): empujan a contraseñas predecibles como `Password1!`.
 
@@ -193,6 +194,8 @@ Bajo `/auth` en el servicio (`/api/auth` vía gateway):
 Los errores de login llevan `{"detail": ..., "codigo": ...}` para que el frontend distinga los casos sin parsear texto.
 
 En el gateway: las cuatro rutas públicas nuevas se suman a `es_publica()` y al grupo `auth` de `rate_limit.grupo_de()`.
+
+**Corrección encontrada en la verificación integrada: CORS como capa externa del gateway.** En la Etapa I, CORS quedaba *dentro* del pipeline (para que los preflight `OPTIONS` quedaran en la bitácora). Pero las respuestas que genera el propio pipeline (401 por token inválido o revocado, 429 por rate limit) cortaban antes de pasar por CORS y salían sin `Access-Control-Allow-Origin`. El navegador las bloqueaba y el frontend solo veía un error de red: no podía renovar el token, mostrar "tu sesión se cerró" ni leer `Retry-After`. Los tests con MSW no lo detectaban porque no aplican CORS. Ahora CORS es la capa más externa y hay tests que verifican los headers en 401 y 429. Costo aceptado: los preflight `OPTIONS` los responde CORS y no se registran en la bitácora (las solicitudes reales sí, todas).
 
 ### 11. Frontend
 
