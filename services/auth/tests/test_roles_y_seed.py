@@ -17,6 +17,8 @@ def test_administrador_crea_event_owner(client):
     r = client.post("/auth/event-owners", json=OWNER, headers=_como("administrador"))
     assert r.status_code == 201
     assert r.json()["rol"] == "event_owner"
+    # 2.3: los owners que crea el admin quedan activos y pueden ingresar.
+    assert client.post("/auth/login", json=OWNER).status_code == 200
 
 
 @pytest.mark.parametrize("rol", ["cliente", "event_owner"])
@@ -38,6 +40,7 @@ def test_seed_es_idempotente_y_no_cambia_la_password(db_session):
     admins = db_session.scalars(select(Usuario)).all()
     assert len(admins) == 1
     assert admins[0].rol == "administrador"
+    assert admins[0].estado == "activa"
     assert admins[0].password_hash == hash_original
 
 
@@ -50,3 +53,9 @@ def test_admin_semilla_puede_loguearse(client, db_session):
     servicio.crear_admin_inicial(db_session, "admin@ticketera.local", "admin-clave-1")
     r = client.post("/auth/login", json={"email": "admin@ticketera.local", "password": "admin-clave-1"})
     assert r.status_code == 200
+
+
+def test_event_owner_con_contrasenia_debil_responde_422(client):
+    r = client.post("/auth/event-owners", json={"email": "o@x.com", "password": "password123"},
+                    headers=_como("administrador"))
+    assert r.status_code == 422

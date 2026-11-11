@@ -3,7 +3,7 @@
 1. inicia el timer y toma la IP del cliente
 2. descarta X-User-Id / X-User-Role enviados por el cliente
 3. rate limit en Redis (antes de llamar a cualquier servicio)
-4. valida el JWT localmente (sin llamar a auth)
+4. valida el JWT localmente (sin llamar a auth) y que no este revocado
 5. reenvia al servicio (proxy.py) con la identidad del token
 6. registra la solicitud en la bitacora
 7. devuelve la respuesta
@@ -18,7 +18,7 @@ import time
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from app import bitacora, rate_limit
+from app import bitacora, rate_limit, revocacion
 from app.seguridad import HEADERS_DE_IDENTIDAD, TokenInvalido, es_publica, validar_token
 
 
@@ -87,9 +87,13 @@ async def _procesar(request, call_next, estado, settings, ip, metodo, ruta):
     autorizacion = request.headers.get("authorization", "")
     if autorizacion.lower().startswith("bearer "):
         try:
-            request.state.identidad = validar_token(autorizacion[7:].strip(), settings.jwt_secret)
+            identidad = validar_token(autorizacion[7:].strip(), settings.jwt_secret)
         except TokenInvalido:
             return JSONResponse({"detail": "token invalido o expirado"}, status_code=401)
+        # 4b. Revocacion inmediata (marca publicada por auth en Redis)
+        if await revocacion.esta_revocado(estado.redis, identidad):
+            return JSONResponse({"detail": "la sesion fue revocada"}, status_code=401)
+        request.state.identidad = identidad
     elif not es_publica(metodo, ruta) and ruta.startswith("/api/"):
         return JSONResponse({"detail": "se requiere autenticacion"}, status_code=401)
 

@@ -40,8 +40,13 @@ def create_app(
     app.include_router(health.router)
     app.include_router(proxy.router)
 
-    # CORS queda "adentro" del pipeline: el pipeline (agregado despues) es la
-    # capa externa, asi tambien los preflight quedan en la bitacora.
+    # Orden: el ultimo middleware agregado es la capa EXTERNA.
+    # CORS tiene que ser la mas externa: asi tambien las respuestas que genera
+    # el propio pipeline (401, 429) llevan los headers CORS y el navegador
+    # deja leerlas. Si CORS quedara adentro, esas respuestas cortan antes de
+    # pasar por CORS y el frontend solo ve un error de red. Costo aceptado:
+    # los preflight OPTIONS los responde CORS y no quedan en la bitacora.
+    app.middleware("http")(pipeline)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.lista_cors(),
@@ -49,5 +54,4 @@ def create_app(
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
         expose_headers=["Retry-After"],
     )
-    app.middleware("http")(pipeline)
     return app
