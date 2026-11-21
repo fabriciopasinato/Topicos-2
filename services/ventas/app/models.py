@@ -27,10 +27,8 @@ CANCELADA = "cancelada"
 
 
 class InventarioEvento(Base):
-    """Marca que el inventario de un evento ya fue recibido (idempotencia) y
-    guarda la copia del estado del evento que decide eventos: fecha de inicio
-    y cancelacion. Ventas nunca los cambia por su cuenta: solo los actualiza
-    eventos, con una `version` creciente que hace idempotentes los reenvios."""
+    """Marca que el inventario de un evento ya fue recibido (idempotencia).
+    fecha_inicio y cancelado son copia de eventos: solo los cambia eventos."""
 
     __tablename__ = "inventario_eventos"
 

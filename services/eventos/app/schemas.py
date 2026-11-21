@@ -35,23 +35,21 @@ class EventoIn(BaseModel):
     nombre: str = Field(min_length=1, max_length=200)
     fecha: datetime
     recinto_id: int
-    tipo: str = Field(min_length=1, max_length=30)  # codigo del catalogo de tipos
-    organizador: str = Field(max_length=200)  # nombre: se busca o se crea
-    participantes: list[str] = Field(default=[], max_length=50)  # nombres: se buscan o se crean
+    tipo: str = Field(min_length=1, max_length=30)
+    organizador: str = Field(max_length=200)
+    participantes: list[str] = Field(default=[], max_length=50)
     descripcion: str = Field(default="", max_length=5000)
 
 
 class EventoPatch(BaseModel):
-    """Edicion de datos descriptivos. La fecha NO se edita aca: se cambia con
-    la reprogramacion, que avisa a ventas. Los campos ausentes no cambian;
-    `participantes` reemplaza la lista completa."""
+    """La fecha no se edita aca: se reprograma, porque hay que avisar a ventas."""
 
     nombre: str | None = Field(default=None, min_length=1, max_length=200)
     descripcion: str | None = Field(default=None, max_length=5000)
     tipo: str | None = Field(default=None, min_length=1, max_length=30)
     organizador: str | None = Field(default=None, max_length=200)
     participantes: list[str] | None = Field(default=None, max_length=50)
-    recinto_id: int | None = None  # solo en borrador
+    recinto_id: int | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -119,19 +117,17 @@ class EventoResumen(BaseModel):
     id: int
     nombre: str
     fecha: datetime
-    estado: str  # borrador | publicado | cancelado | finalizado (calculado)
+    estado: str
     owner_id: int
     recinto: RecintoOut
     tipo: str
-    organizador: OrganizadorOut | None  # None solo en eventos anteriores a este dato
+    organizador: OrganizadorOut | None
     participantes: list[ParticipanteOut] = []
 
 
 class OperacionPendienteOut(BaseModel):
-    """Reprogramacion o cancelacion que todavia no confirmo ventas."""
-
-    tipo: str  # reprogramar | cancelar
-    fecha: datetime | None = None  # nueva fecha, solo en reprogramar
+    tipo: str
+    fecha: datetime | None = None
     created_at: datetime
     intentos: int
 
@@ -139,7 +135,6 @@ class OperacionPendienteOut(BaseModel):
 class EventoDetalle(EventoResumen):
     descripcion: str = ""
     sectores: list[SectorOut] = []
-    # Solo para el owner y los administradores; vacio para el resto.
     operaciones_pendientes: list[OperacionPendienteOut] = []
 
 

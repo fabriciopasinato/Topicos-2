@@ -16,8 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 
-# Estados guardados. "finalizado" no se guarda: es un evento publicado cuya
-# fecha de inicio ya llego, y se calcula al consultar (reloj de la base).
+# "finalizado" no se guarda: se calcula (publicado cuya fecha ya llego).
 BORRADOR = "borrador"
 PUBLICADO = "publicado"
 CANCELADO = "cancelado"
@@ -27,9 +26,6 @@ GENERAL = "general"
 
 
 class TipoEvento(Base):
-    """Catalogo de tipos de evento. El codigo es la clave (la API usa
-    "tipo": "recital"); agregar un tipo es insertar una fila por migracion."""
-
     __tablename__ = "tipos_evento"
 
     codigo: Mapped[str] = mapped_column(String(30), primary_key=True)
@@ -37,7 +33,7 @@ class TipoEvento(Base):
 
 
 class Organizador(Base):
-    """Quien produce el evento (no es el owner, que es la cuenta que lo carga)."""
+    """Quien produce el evento; no es el owner (la cuenta que lo carga)."""
 
     __tablename__ = "organizadores"
 
@@ -47,8 +43,6 @@ class Organizador(Base):
 
 
 class Participante(Base):
-    """Quien se presenta en el evento: artista, banda, equipo, orador."""
-
     __tablename__ = "participantes"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -89,11 +83,9 @@ class Evento(Base):
     descripcion: Mapped[str] = mapped_column(Text, default="", server_default="")
     # Nullable solo por eventos anteriores a este dato: la API lo exige.
     organizador_id: Mapped[int | None] = mapped_column(ForeignKey("organizadores.id"), index=True)
-    # version: ultima asignada a una operacion hacia ventas.
-    # version_aplicada: ultima aplicada en eventos (confirmada por ventas).
+    # version: ultima asignada; version_aplicada: ultima confirmada por ventas.
     version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     version_aplicada: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    # Se completa al publicar. Un evento cancelado es publico solo si se publico.
     publicado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     recinto: Mapped[Recinto] = relationship()
@@ -107,30 +99,23 @@ class Evento(Base):
 
 
 class TipoOperacion(StrEnum):
-    """Que cambio del evento hay que hacerle llegar a ventas.
+    """Enum y no tabla: un tipo nuevo exige programar su efecto (servicio.EFECTOS)."""
 
-    Es comportamiento, no un dato de catalogo: un tipo nuevo exige programar
-    que se le envia a ventas y como se aplica, por eso es un enum y no una tabla.
-    """
-
-    REPROGRAMAR = "reprogramar"  # cambia la fecha: ventas recibe {version, fecha_inicio}
-    CANCELAR = "cancelar"        # cancela el evento: ventas recibe {version, cancelado: true}
+    REPROGRAMAR = "reprogramar"
+    CANCELAR = "cancelar"
 
 
 class EstadoOperacion(StrEnum):
-    PENDIENTE = "pendiente"    # guardada, todavia sin confirmacion de ventas (el cron la reintenta)
-    CONFIRMADA = "confirmada"  # ventas la confirmo y ya se aplico en eventos
+    PENDIENTE = "pendiente"
+    CONFIRMADA = "confirmada"
 
 
 def _valores_sql(enum: type[StrEnum]) -> str:
-    """'a', 'b' para el CHECK: la base admite exactamente los valores del enum."""
     return ", ".join(f"'{v.value}'" for v in enum)
 
 
 class OperacionVentas(Base):
-    """Outbox: una reprogramacion o cancelacion de un evento publicado que
-    debe llegar a ventas. Se guarda antes de avisar, para poder reintentar.
-    `tipo` es un TipoOperacion y `estado` un EstadoOperacion."""
+    """Outbox: se guarda antes de avisar a ventas, para poder reintentar."""
 
     __tablename__ = "operaciones_ventas"
     __table_args__ = (

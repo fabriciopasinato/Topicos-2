@@ -27,14 +27,10 @@ class ZonaInventario(BaseModel):
 class InventarioIn(BaseModel):
     evento_id: int
     zonas: list[ZonaInventario]
-    # Opcional para no romper envios anteriores: sin fecha no se cierra la venta.
     fecha_inicio: datetime | None = None
 
 
 class ActualizacionEventoIn(BaseModel):
-    """Cambio que decide eventos (el duenio del dato). `version` crece con cada
-    cambio del evento: ventas solo aplica versiones mayores a la ultima."""
-
     version: int = Field(gt=0)
     fecha_inicio: datetime | None = None
     cancelado: bool = False
@@ -123,8 +119,7 @@ def recibir_inventario(datos: InventarioIn, session: Session = Depends(get_sessi
 
 @router.put("/internal/eventos/{evento_id}")
 def actualizar_evento(evento_id: int, datos: ActualizacionEventoIn, session: Session = Depends(get_session)):
-    """200 tanto si aplica el cambio como si lo ignora por version: para
-    eventos, en los dos casos ventas ya esta al dia con esa version."""
+    """200 tambien si lo ignora por version: ventas ya esta al dia."""
     with _errores():
         aplicado = servicio.actualizar_evento(
             session, evento_id, datos.version, datos.fecha_inicio, datos.cancelado,

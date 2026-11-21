@@ -95,8 +95,7 @@ def test_operacion_inexistente_no_falla(db_session):
 # --- Efectos por tipo de operacion ---------------------------------------------------
 
 def test_todo_tipo_de_operacion_tiene_su_efecto():
-    """Un tipo nuevo sin efecto definido falla aca, en lugar de caer en un caso
-    por defecto equivocado (por ejemplo, cancelar el evento)."""
+    """Un tipo sin efecto no puede caer en un caso por defecto equivocado."""
     assert set(servicio.EFECTOS) == set(TipoOperacion)
 
 

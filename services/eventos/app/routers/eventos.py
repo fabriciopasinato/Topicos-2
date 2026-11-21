@@ -37,8 +37,7 @@ def _errores():
 
 
 def _detalle(session: Session, evento, identidad: Identidad | None = None) -> EventoDetalle:
-    """Detalle con el estado calculado (finalizado) segun el reloj de la base y,
-    para el owner y los administradores, las operaciones pendientes con ventas."""
+    """Las operaciones pendientes solo se muestran al owner y a los administradores."""
     cambios = {"estado": servicio.estado_de(evento, servicio.ahora(session))}
     if servicio.puede_gestionar(evento, identidad):
         cambios["operaciones_pendientes"] = [
@@ -76,15 +75,12 @@ def cartelera(
     hasta: datetime | None = None,
     session: Session = Depends(get_session),
 ):
-    """Cartelera publica: publicados que todavia no empezaron. Filtros
-    opcionales y combinables: tipo y rango de fechas de inicio."""
     with _errores():
         return _resumenes(session, servicio.listar_cartelera(session, tipo, desde, hasta))
 
 
 @router.get("/tipos", response_model=list[TipoEventoOut])
 def tipos(session: Session = Depends(get_session)):
-    """Catalogo de tipos de evento. Publico (GET /api/eventos/*)."""
     return [TipoEventoOut.model_validate(t, from_attributes=True) for t in servicio.listar_tipos(session)]
 
 
@@ -117,7 +113,6 @@ def editar_evento(evento_id: int, datos: EventoPatch, session: Session = Depends
 
 @router.delete("/{evento_id}", status_code=status.HTTP_204_NO_CONTENT)
 def borrar_evento(evento_id: int, session: Session = Depends(get_session), identidad: Identidad = Depends(gestor)):
-    """Solo borradores (409 si esta publicado, finalizado o cancelado)."""
     with _errores():
         servicio.borrar_evento(session, evento_id, identidad)
     return Response(status_code=204)
@@ -156,8 +151,6 @@ def publicar(evento_id: int, session: Session = Depends(get_session), identidad:
 
 def _resultado(session: Session, evento_id: int, identidad: Identidad, resultado: servicio.Resultado,
                response: Response) -> EventoDetalle:
-    """200 si el cambio quedo aplicado; 202 si quedo pendiente de ventas (lo
-    completa eventos-cron). En los dos casos devuelve el detalle actual."""
     if resultado == servicio.Resultado.PENDIENTE:
         response.status_code = status.HTTP_202_ACCEPTED
     return _detalle(session, servicio.obtener_visible(session, evento_id, identidad), identidad)

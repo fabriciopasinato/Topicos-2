@@ -1,5 +1,4 @@
-"""Cartelera: filtros por tipo y fecha, exclusion de cancelados y finalizados,
-y visibilidad del detalle de eventos cancelados."""
+"""Cartelera: filtros, exclusion de cancelados y finalizados, y visibilidad del detalle."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -19,8 +18,7 @@ def recinto(client):
 
 @pytest.fixture
 def crear(client, db_session, recinto):
-    """Crea un evento y lo deja en el estado y la fecha pedidos (por SQL, para
-    no depender de ventas). `dias` negativo = fecha pasada."""
+    """Estado y fecha por SQL, para no depender de ventas."""
 
     def _crear(nombre: str, estado: str = "publicado", dias: float = 30, tipo: str = "recital",
                publicado: bool | None = None) -> int:

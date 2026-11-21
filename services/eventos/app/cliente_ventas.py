@@ -1,6 +1,4 @@
-"""Cliente HTTP sync hacia ventas. Al publicar un evento se le entrega el
-inventario; al reprogramarlo o cancelarlo, se le envia el cambio con su version
-(lo usan el envio inmediato y el reintento de eventos-cron)."""
+"""Cliente HTTP sync hacia ventas."""
 
 from datetime import datetime
 
@@ -10,12 +8,11 @@ from app.config import get_settings
 
 
 class VentasNoDisponible(Exception):
-    """Ventas no confirmo: caido, timeout o error. La operacion se reintenta."""
+    pass
 
 
 class InventarioInexistente(VentasNoDisponible):
-    """Ventas respondio 404: no tiene el inventario del evento. Para un evento
-    publicado no deberia pasar; se reintenta igual, pero se distingue en logs."""
+    """404 de ventas. No deberia pasar con un evento publicado; se reintenta igual."""
 
 
 class ClienteVentas:
@@ -36,8 +33,6 @@ class ClienteVentas:
 
     def actualizar_evento(self, evento_id: int, version: int, fecha_inicio: datetime | None = None,
                           cancelado: bool = False) -> None:
-        """PUT /internal/eventos/{id}. Ventas lo aplica solo si la version es
-        mayor a la ultima: un reenvio o un mensaje tardio responden 200 igual."""
         cuerpo: dict = {"version": version}
         if fecha_inicio is not None:
             cuerpo["fecha_inicio"] = fecha_inicio.isoformat()

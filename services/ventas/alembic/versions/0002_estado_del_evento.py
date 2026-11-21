@@ -1,8 +1,5 @@
 """Estado del evento en el inventario: fecha de inicio, cancelacion y version
 
-Copia de lo que decide eventos (su duenio): ventas la usa para cerrar la venta
-de eventos cancelados o ya iniciados sin consultar a eventos.
-
 Revision ID: 0002
 Revises: 0001
 Create Date: 2026-11-21
@@ -19,8 +16,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # Nullable: los inventarios recibidos antes de este cambio no tienen fecha
-    # y siguen vendiendose como antes.
+    # Nullable: los inventarios anteriores no tienen fecha y siguen vendiendose.
     op.add_column("inventario_eventos", sa.Column("fecha_inicio", sa.DateTime(timezone=True), nullable=True))
     op.add_column(
         "inventario_eventos",

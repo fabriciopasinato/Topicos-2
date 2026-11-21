@@ -1,9 +1,4 @@
-"""Cierre de la venta de eventos cancelados o iniciados.
-
-Ventas decide solo con sus datos (inventario_eventos): estos tests no levantan
-ni simulan el servicio de eventos, lo que tambien cubre el escenario "eventos
-caido".
-"""
+"""Cierre de la venta. No levanta ni simula eventos: cubre tambien "eventos caido"."""
 
 import pytest
 from sqlalchemy import text
@@ -62,8 +57,6 @@ def test_evento_sin_fecha_registrada_sigue_vendiendo(client):
 
 
 def test_reintento_tras_el_rechazo_se_evalua_de_nuevo(con_inventario, db_session):
-    """El 409 por evento cerrado descarta la Idempotency-Key, como los demas
-    rechazos: no queda una clave 'pegada' a un rechazo."""
     _cancelar(con_inventario)
     assert reservar(con_inventario, generales=[(ZONA_GENERAL, 1)], clave="K").status_code == 409
     assert _cantidad(db_session, "SELECT count(*) FROM idempotency_keys") == 0

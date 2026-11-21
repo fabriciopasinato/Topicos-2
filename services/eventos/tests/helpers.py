@@ -4,14 +4,11 @@ from datetime import UTC, datetime, timedelta
 
 
 def fecha_futura(dias: int = 30) -> str:
-    """Fecha ISO `dias` despues de ahora. Relativa a proposito: con una fecha
-    fija, los tests empezarian a fallar solos el dia que esa fecha pase (el
-    evento se informaria finalizado y no se podria publicar)."""
+    """Relativa a proposito: una fecha fija haria fallar los tests el dia que pase."""
     return (datetime.now(UTC) + timedelta(days=dias)).isoformat()
 
 
 def datos_evento(recinto_id: int, **cambios) -> dict:
-    """Cuerpo valido de POST /eventos; `cambios` pisa o agrega campos."""
     return {
         "nombre": "Recital",
         "fecha": fecha_futura(),
@@ -23,10 +20,8 @@ def datos_evento(recinto_id: int, **cambios) -> dict:
 
 
 class VentasFalsa:
-    """Reemplaza al cliente HTTP de ventas aplicando sus mismas reglas: solo
-    versiones mayores a la ultima, y la cancelacion es irreversible. Asi los
-    tests pueden verificar el estado final en los dos servicios.
-    `caida = True` simula ventas sin responder."""
+    """Cliente de ventas falso con las mismas reglas que ventas (version y
+    cancelacion irreversible), para verificar el estado final en los dos lados."""
 
     def __init__(self):
         import threading
@@ -54,7 +49,7 @@ class VentasFalsa:
     def actualizar_evento(self, evento_id, version, fecha_inicio=None, cancelado=False) -> None:
         self._no_responde()
         if fecha_inicio is not None:
-            fecha_inicio = fecha_inicio.isoformat()  # como viaja por la red (JSON)
+            fecha_inicio = fecha_inicio.isoformat()
         with self._lock:
             self.recibidos.append({"evento_id": evento_id, "version": version,
                                    "fecha_inicio": fecha_inicio, "cancelado": cancelado})

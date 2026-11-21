@@ -1,9 +1,5 @@
-"""Matriz de acciones permitidas por estado (unitario, sin base).
-
-La tabla esperada se escribe aca a mano, a partir de lo acordado en la spec,
-en lugar de importarla: si alguien cambia una celda del codigo por error, este
-test lo detecta.
-"""
+"""Matriz de acciones por estado. La tabla esperada esta escrita a mano (no
+importada) para detectar un cambio accidental en el codigo."""
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace

@@ -59,21 +59,12 @@ class ReservaNoVigente(Exception):
 
 
 class EventoNoALaVenta(Exception):
-    """El evento fue cancelado o ya comenzo: no se reserva ni se paga."""
+    pass
 
 
 def _exigir_evento_a_la_venta(session: Session, evento_id: int) -> None:
-    """Cierre de la venta con datos propios de ventas, sin consultar a eventos.
-
-    FOR SHARE: muchas reservas y pagos la toman a la vez sin frenarse, pero el
-    UPDATE de una cancelacion (actualizar_evento) espera a que terminen, y
-    quienes llegan durante la cancelacion esperan a que termine y la ven. Asi
-    una reserva concurrente con la cancelacion o la ve, o termina antes y su
-    pago posterior la ve.
-
-    Sin fila de inventario se mantiene el comportamiento anterior; sin
-    fecha_inicio (inventarios viejos) no se cierra por fecha.
-    """
+    """FOR SHARE: reservas y pagos no se frenan entre si, pero quedan
+    serializados con el UPDATE de una cancelacion."""
     cerrado = session.execute(
         text("SELECT cancelado OR (fecha_inicio IS NOT NULL AND fecha_inicio <= now()) "
              "FROM inventario_eventos WHERE evento_id = :e FOR SHARE"),
@@ -110,9 +101,8 @@ class PedidoReserva:
 # --- Inventario -----------------------------------------------------------------
 
 def recibir_inventario(session: Session, inventario: dict) -> bool:
-    """Crea un ticket por entrada y guarda la fecha de inicio del evento.
-    Idempotente por evento: devuelve False si el inventario ya se habia
-    recibido (y no crea ni cambia nada, tampoco la fecha)."""
+    """Crea un ticket por entrada. Idempotente por evento: devuelve False si
+    el inventario ya se habia recibido (y no crea nada)."""
     evento_id = inventario["evento_id"]
     creado = session.execute(
         pg_insert(InventarioEvento).values(evento_id=evento_id, fecha_inicio=inventario.get("fecha_inicio"))
@@ -139,17 +129,8 @@ def recibir_inventario(session: Session, inventario: dict) -> bool:
 
 def actualizar_evento(session: Session, evento_id: int, version: int,
                       fecha_inicio=None, cancelar: bool = False) -> bool:
-    """Aplica un cambio de fecha o una cancelacion que decidio eventos.
-
-    Un solo UPDATE condicional por version: solo se aplica si `version` es
-    mayor a la ultima aplicada, asi un reenvio o un mensaje que llega tarde no
-    cambia nada. La cancelacion es irreversible (`cancelado OR :cancelar`) y,
-    una vez cancelado, la fecha ya no cambia. En el SET de PostgreSQL las
-    columnas valen lo que tenian ANTES del UPDATE.
-
-    Devuelve True si aplico el cambio y False si lo ignoro por version.
-    Lanza NoEncontrado si ventas no tiene el inventario del evento.
-    """
+    """Devuelve False si lo ignoro por version. En el SET de PostgreSQL las
+    columnas valen lo que tenian ANTES del UPDATE: el CASE depende de eso."""
     aplicado = session.execute(
         text(
             "UPDATE inventario_eventos SET "
@@ -220,8 +201,7 @@ def reservar(session: Session, user_id: int, clave: str, pedido: PedidoReserva,
         if propia is None:
             return _reserva_previa(session, user_id, clave, pedido)
 
-        # 1b. Evento cancelado o ya iniciado: no se reserva. El rollback
-        #     descarta la clave, como en cualquier otro rechazo.
+        # 1b. Evento cancelado o ya iniciado. El rollback descarta la clave.
         try:
             _exigir_evento_a_la_venta(session, pedido.evento_id)
         except EventoNoALaVenta:

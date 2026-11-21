@@ -168,9 +168,7 @@ def test_dos_pagos_simultaneos_crean_una_sola_orden(engine_paralelo):
 
 
 def test_reservas_concurrentes_con_la_cancelacion_nunca_venden(engine_paralelo):
-    """Cierre de la venta: 5 reservas largadas a la vez que la cancelacion.
-    Cada reserva o se rechaza (vio la cancelacion) o se crea antes de ella, y
-    en ese caso su pago posterior se rechaza. Nunca se vende una entrada."""
+    """Cada reserva o ve la cancelacion, o se crea antes y su pago se rechaza."""
     with engine_paralelo.begin() as c:
         c.execute(text("UPDATE inventario_eventos SET fecha_inicio = now() + interval '1 day'"))
 

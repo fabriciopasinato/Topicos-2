@@ -20,8 +20,6 @@ def test_migracion_aplica_y_revierte(engine, alembic_config):
 
 
 def test_migracion_0002_completa_los_eventos_existentes(engine, alembic_config):
-    """Un evento publicado antes de 0002 queda con tipo 'otro', descripcion
-    vacia, sin organizador, versiones en 0 y publicado_at = created_at."""
     try:
         command.downgrade(alembic_config, "0001")
         with engine.begin() as c:
@@ -110,8 +108,7 @@ def test_version_repetida_de_un_evento_se_rechaza(db_session):
 
 
 def test_la_base_acepta_exactamente_los_tipos_y_estados_de_operacion(db_session):
-    """Ata los enums del codigo con los checks de la migracion: si se agrega un
-    valor a TipoOperacion o EstadoOperacion sin migrar, este test falla."""
+    """Falla si se agrega un valor a un enum sin su migracion."""
     from app.models import EstadoOperacion, TipoOperacion
 
     _evento(db_session)

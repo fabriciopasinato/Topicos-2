@@ -1,12 +1,5 @@
 """Clasificacion del evento, ciclo de vida y outbox hacia ventas
 
-- tipos_evento: catalogo de tipos (codigo + nombre visible) con los seis
-  iniciales. Un tipo nuevo se agrega con otra migracion que inserta la fila.
-- organizadores y participantes: entidades minimas, unicas por nombre normalizado.
-- eventos: tipo, descripcion, organizador, version / version_aplicada,
-  publicado_at y el estado 'cancelado'.
-- operaciones_ventas: outbox de reprogramaciones y cancelaciones pendientes.
-
 Revision ID: 0002
 Revises: 0001
 Create Date: 2026-11-21
@@ -32,7 +25,6 @@ TIPOS_INICIALES = [
 
 
 def _catalogo(nombre: str) -> None:
-    """organizadores / participantes: `clave` es el nombre normalizado."""
     op.create_table(
         nombre,
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -60,15 +52,14 @@ def upgrade() -> None:
     )
     op.create_index("ix_evento_participantes_participante_id", "evento_participantes", ["participante_id"])
 
-    # tipo: el default solo completa los eventos existentes y despues se quita,
-    # para que la base tambien exija el tipo en las altas nuevas.
+    # El default solo completa los eventos existentes; se quita para que la base exija el tipo.
     op.add_column("eventos", sa.Column("tipo", sa.String(30), nullable=False, server_default="otro"))
     op.alter_column("eventos", "tipo", server_default=None)
     op.create_foreign_key("fk_eventos_tipo", "eventos", "tipos_evento", ["tipo"], ["codigo"])
     op.create_index("ix_eventos_tipo", "eventos", ["tipo"])
 
     op.add_column("eventos", sa.Column("descripcion", sa.Text(), nullable=False, server_default=""))
-    # Nullable solo por los eventos existentes: la API lo exige en las altas.
+    # Nullable solo por los eventos existentes.
     op.add_column("eventos", sa.Column("organizador_id", sa.Integer(), sa.ForeignKey("organizadores.id"), nullable=True))
     op.create_index("ix_eventos_organizador_id", "eventos", ["organizador_id"])
     op.add_column("eventos", sa.Column("version", sa.Integer(), nullable=False, server_default="0"))
@@ -97,7 +88,6 @@ def upgrade() -> None:
         sa.CheckConstraint("tipo <> 'reprogramar' OR fecha IS NOT NULL", name="ck_operaciones_ventas_fecha"),
         sa.UniqueConstraint("evento_id", "version", name="uq_operaciones_ventas_evento_version"),
     )
-    # El cron busca solo lo pendiente y vencido.
     op.create_index(
         "ix_operaciones_ventas_pendientes", "operaciones_ventas", ["proximo_intento_at"],
         postgresql_where=sa.text("estado = 'pendiente'"),

@@ -38,27 +38,16 @@ LARGO_MAXIMO_NOMBRE = 200
 
 
 def limpiar_nombre(nombre: str) -> str:
-    """Sin espacios al principio ni al final y con los internos colapsados.
-    Es como se guarda y se muestra el nombre."""
     return " ".join(nombre.split())
 
 
 def normalizar_nombre(nombre: str) -> str:
-    """Clave de unicidad: el nombre limpio y sin distinguir mayusculas.
-    " los  PIOJOS " y "Los Piojos" tienen la misma clave."""
     return limpiar_nombre(nombre).casefold()
 
 
 def buscar_o_crear(session: Session, modelo: type[Organizador] | type[Participante], nombre: str):
-    """Devuelve el organizador o participante con ese nombre (sin distinguir
-    mayusculas ni espacios) y lo crea si no existe.
-
-    INSERT ... ON CONFLICT DO NOTHING sobre la clave unica: si otra transaccion
-    esta insertando la misma clave, este INSERT espera a que termine; si ella
-    confirma, no inserta nada y el SELECT siguiente ve su fila. Asi dos altas
-    simultaneas del mismo nombre terminan en una sola fila, sin capturar
-    errores de integridad. No hace commit: es parte de la transaccion de quien llama.
-    """
+    """ON CONFLICT DO NOTHING + SELECT: dos altas simultaneas del mismo nombre
+    terminan en una sola fila. No hace commit."""
     limpio = limpiar_nombre(nombre)
     if not limpio:
         raise Invalido("el nombre no puede estar vacio")
@@ -77,23 +66,17 @@ def buscar_o_crear(session: Session, modelo: type[Organizador] | type[Participan
 
 
 def ahora(session: Session) -> datetime:
-    """Reloj de la base, el mismo que usa ventas para cerrar la venta: asi los
-    dos servicios coinciden en cuando empezo un evento."""
+    """Reloj de la base: el mismo que usa ventas para cerrar la venta."""
     return session.scalar(select(func.now()))
 
 
 def estado_de(evento: Evento, momento: datetime) -> str:
-    """Estado informado: el guardado, salvo un evento publicado cuya fecha de
-    inicio ya llego, que se informa `finalizado` (no se guarda)."""
     if evento.estado == PUBLICADO and evento.fecha <= momento:
         return FINALIZADO
     return evento.estado
 
 
 class Accion(StrEnum):
-    """Lo que se le puede hacer a un evento. Que se permite en cada estado lo
-    decide una sola tabla: ACCIONES_PERMITIDAS."""
-
     EDITAR = "editar"
     CAMBIAR_RECINTO = "cambiar el recinto de"
     MODIFICAR_ZONAS = "modificar las zonas de"
@@ -103,10 +86,8 @@ class Accion(StrEnum):
     BORRAR = "borrar"
 
 
-# Matriz de que se puede hacer en cada estado (el informado, con finalizado
-# calculado). Cambiar una regla es cambiar una celda.
 ACCIONES_PERMITIDAS: dict[str, frozenset[Accion]] = {
-    BORRADOR: frozenset(Accion),  # todo
+    BORRADOR: frozenset(Accion),
     PUBLICADO: frozenset({Accion.EDITAR, Accion.REPROGRAMAR, Accion.CANCELAR}),
     FINALIZADO: frozenset(),
     CANCELADO: frozenset(),
@@ -114,9 +95,8 @@ ACCIONES_PERMITIDAS: dict[str, frozenset[Accion]] = {
 
 
 def exigir_permitido(evento: Evento, accion: Accion, momento: datetime) -> None:
-    """Conflicto (409) si la accion no esta permitida en el estado del evento.
-    Las repeticiones idempotentes (publicar un publicado, cancelar un
-    cancelado) las resuelve cada operacion antes de llamar a esta funcion."""
+    """Las repeticiones idempotentes (publicar un publicado, cancelar un
+    cancelado) se resuelven antes de llamar a esta funcion."""
     estado = estado_de(evento, momento)
     if accion not in ACCIONES_PERMITIDAS[estado]:
         raise Conflicto(f"no se puede {accion} un evento {estado}")
@@ -146,14 +126,10 @@ def puede_gestionar(evento: Evento, identidad: Identidad | None) -> bool:
 
 
 def es_publico(evento: Evento) -> bool:
-    """Publicados (incluidos los finalizados) y cancelados que llegaron a
-    publicarse: los ve cualquiera, por ejemplo desde "Mis compras". Borradores
-    y cancelados sin publicar: solo su owner y los administradores."""
     return evento.estado == PUBLICADO or (evento.estado == CANCELADO and evento.publicado_at is not None)
 
 
 def obtener_visible(session: Session, evento_id: int, identidad: Identidad | None) -> Evento:
-    """Para quien no puede verlo, el evento 'no existe' (404)."""
     evento = session.scalar(select(Evento).where(Evento.id == evento_id).options(*_cargar_detalle()))
     if evento is None or (not es_publico(evento) and not puede_gestionar(evento, identidad)):
         raise NoEncontrado()
@@ -174,9 +150,6 @@ def obtener_gestionable(session: Session, evento_id: int, identidad: Identidad, 
 
 def listar_cartelera(session: Session, tipo: str | None = None,
                      desde: datetime | None = None, hasta: datetime | None = None) -> list[Evento]:
-    """Eventos publicados que todavia no empezaron (reloj de la base),
-    filtrables por tipo y rango de fechas de inicio, ordenados por fecha.
-    Cancelados y finalizados no se listan."""
     if tipo is not None:
         _exigir_tipo(session, tipo)
     if desde is not None and hasta is not None and desde > hasta:
@@ -218,8 +191,6 @@ def _exigir_recinto(session: Session, recinto_id: int) -> int:
 
 
 def _participantes(session: Session, nombres: list[str]) -> list[Participante]:
-    """Busca o crea cada participante; un mismo participante indicado dos
-    veces (aunque se escriba distinto) queda una sola vez."""
     unicos: dict[int, Participante] = {}
     for nombre in nombres:
         participante = buscar_o_crear(session, Participante, nombre)
@@ -235,7 +206,7 @@ def crear_evento(session: Session, datos: EventoIn, identidad: Identidad) -> Eve
         organizador = buscar_o_crear(session, Organizador, datos.organizador)
         participantes = _participantes(session, datos.participantes)
     except Invalido:
-        session.rollback()  # descarta organizadores o participantes ya creados
+        session.rollback()
         raise
     evento = Evento(
         owner_id=identidad.user_id, nombre=datos.nombre, fecha=datos.fecha,
@@ -248,10 +219,9 @@ def crear_evento(session: Session, datos: EventoIn, identidad: Identidad) -> Eve
 
 
 def editar_evento(session: Session, evento_id: int, datos: EventoPatch, identidad: Identidad) -> Evento:
-    """Edita datos descriptivos de un evento en borrador o publicado vigente.
-    No avisa a ventas: ninguno de estos datos esta replicado alla."""
+    """No avisa a ventas: ninguno de estos datos esta replicado alla."""
     evento = obtener_gestionable(session, evento_id, identidad, bloquear=True)
-    cambios = datos.model_dump(exclude_unset=True, exclude_none=True)  # solo lo que se mando
+    cambios = datos.model_dump(exclude_unset=True, exclude_none=True)
     try:
         momento = ahora(session)
         exigir_permitido(evento, Accion.EDITAR, momento)
@@ -261,10 +231,9 @@ def editar_evento(session: Session, evento_id: int, datos: EventoPatch, identida
             exigir_permitido(evento, Accion.CAMBIAR_RECINTO, momento)
             evento.recinto_id = _exigir_recinto(session, cambios["recinto_id"])
 
-        for campo in ("nombre", "descripcion"):  # asignacion directa
+        for campo in ("nombre", "descripcion"):
             if campo in cambios:
                 setattr(evento, campo, cambios[campo])
-        # Los que validan o buscan algo, uno por uno:
         if "tipo" in cambios:
             evento.tipo = _exigir_tipo(session, cambios["tipo"])
         if "organizador" in cambios:
@@ -272,16 +241,14 @@ def editar_evento(session: Session, evento_id: int, datos: EventoPatch, identida
         if "participantes" in cambios:
             evento.participantes = _participantes(session, cambios["participantes"])
     except (Conflicto, Invalido):
-        session.rollback()  # libera el lock y descarta lo creado a medias
+        session.rollback()
         raise
     session.commit()
     return evento
 
 
 def borrar_evento(session: Session, evento_id: int, identidad: Identidad) -> None:
-    """Solo borradores. Se borran sus sectores, zonas, asientos y su relacion
-    con los participantes; organizadores y participantes quedan (pueden estar
-    en otros eventos)."""
+    """Organizadores y participantes no se borran: pueden estar en otros eventos."""
     evento = obtener_gestionable(session, evento_id, identidad, bloquear=True)
     try:
         exigir_permitido(evento, Accion.BORRAR, ahora(session))
@@ -343,8 +310,7 @@ def borrar_zona(session: Session, evento_id: int, zona_id: int, identidad: Ident
 
 
 def inventario_de(evento: Evento) -> dict:
-    """Lo que ventas necesita para vender: zonas, asientos, precios y la fecha
-    de inicio (con la que ventas cierra la venta sin consultar a eventos)."""
+    """Lo que ventas necesita para vender: zonas, asientos y precios."""
     zonas = []
     for sector in evento.sectores:
         for zona in sector.zonas:
@@ -394,14 +360,10 @@ def publicar(session: Session, evento_id: int, identidad: Identidad, ventas: Cli
     return evento
 
 
-# --- Outbox hacia ventas: que significa cada tipo de operacion -------------------
+# --- Outbox hacia ventas ------------------------------------------------------------
 
 @dataclass(frozen=True)
 class Efecto:
-    """Lo que significa un tipo de operacion, en los dos servicios. Definirlo
-    en un solo lugar evita que el envio y la aplicacion se desincronicen, y
-    que un tipo nuevo caiga en un caso por defecto equivocado."""
-
     cambios_para_ventas: Callable[[OperacionVentas], dict]  # kwargs de ClienteVentas.actualizar_evento
     aplicar_en_eventos: Callable[[Evento, OperacionVentas], None]
 
@@ -427,26 +389,13 @@ EFECTOS: dict[TipoOperacion, Efecto] = {
 
 
 class Resultado(StrEnum):
-    """Como termino una cancelacion o reprogramacion."""
+    APLICADO = "aplicado"
+    PENDIENTE = "pendiente"  # falta que ventas confirme; la reintenta eventos-cron
 
-    APLICADO = "aplicado"    # ya rige en eventos (y en ventas, si estaba publicado) -> 200
-    PENDIENTE = "pendiente"  # guardada; falta que ventas confirme (eventos-cron) -> 202
-
-
-# --- Outbox hacia ventas: aplicar una operacion confirmada ------------------------
 
 def aplicar(session: Session, operacion_id: int) -> None:
-    """Aplica en eventos una operacion que ventas ya confirmo, y la marca
-    confirmada. La usan el envio inmediato y eventos-cron.
-
-    Idempotente y tolerante al desorden: aplica solo si la version es mayor a
-    la ultima aplicada, y nunca sobre un evento cancelado (la cancelacion es
-    final). Una operacion vieja o repetida se marca confirmada sin efecto.
-
-    Orden de locks: primero la operacion y despues el evento, igual que el cron.
-    Con el mismo orden en todos lados, dos confirmaciones simultaneas de la
-    misma operacion se esperan en lugar de bloquearse mutuamente (deadlock).
-    """
+    """Orden de locks: primero la operacion y despues el evento, igual que el
+    cron. Invertirlo puede producir un deadlock entre los dos."""
     op = session.scalar(select(OperacionVentas).where(OperacionVentas.id == operacion_id).with_for_update())
     if op is None or op.estado == EstadoOperacion.CONFIRMADA:
         session.rollback()
@@ -461,8 +410,6 @@ def aplicar(session: Session, operacion_id: int) -> None:
     op.confirmada_at = func.now()
     session.commit()
 
-
-# --- Outbox hacia ventas: registrar, enviar y reintentar --------------------------
 
 ESPERA_BASE_SEGUNDOS = 5
 ESPERA_MAXIMA_SEGUNDOS = 60
@@ -488,9 +435,7 @@ def _hay_cancelacion_pendiente(session: Session, evento_id: int) -> bool:
 
 def _registrar_operacion(session: Session, evento: Evento, tipo: TipoOperacion,
                          fecha: datetime | None = None) -> int:
-    """TX1 del outbox: con el evento bloqueado, asigna la proxima version y
-    guarda la intencion. Desde el commit, la operacion ya no se pierde: si el
-    envio falla o el proceso se cae, eventos-cron la reintenta."""
+    """Requiere el evento bloqueado (la version no puede repetirse)."""
     evento.version += 1
     op = OperacionVentas(evento_id=evento.id, tipo=tipo, version=evento.version, fecha=fecha)
     session.add(op)
@@ -499,10 +444,10 @@ def _registrar_operacion(session: Session, evento: Evento, tipo: TipoOperacion,
 
 
 def registrar_fallo(session: Session, operacion_id: int, error: Exception) -> None:
-    """Posterga el proximo intento con espera exponencial (5, 10, 20, 40, 60, 60... s)."""
     session.execute(
         update(OperacionVentas)
-        .where(OperacionVentas.id == operacion_id)
+        # Si otro envio simultaneo ya la confirmo, este fallo no la toca.
+        .where(OperacionVentas.id == operacion_id, OperacionVentas.estado == EstadoOperacion.PENDIENTE)
         .values(
             intentos=OperacionVentas.intentos + 1,
             ultimo_error=str(error)[:500],
@@ -516,11 +461,9 @@ def registrar_fallo(session: Session, operacion_id: int, error: Exception) -> No
 
 
 def enviar(session: Session, operacion_id: int, ventas: ClienteVentas) -> Resultado:
-    """Envia la operacion a ventas (sin locks tomados durante el HTTP). Si
-    ventas confirma, la aplica en eventos; si no, registra el fallo."""
     op = session.get(OperacionVentas, operacion_id)
     evento_id, version, cambios = op.evento_id, op.version, EFECTOS[op.tipo].cambios_para_ventas(op)
-    session.rollback()  # no retener nada mientras se espera a ventas
+    session.rollback()  # sin locks tomados mientras se espera a ventas
     try:
         ventas.actualizar_evento(evento_id, version, **cambios)
     except VentasNoDisponible as error:
@@ -531,12 +474,6 @@ def enviar(session: Session, operacion_id: int, ventas: ClienteVentas) -> Result
 
 
 def cancelar(session: Session, evento_id: int, identidad: Identidad, ventas: ClienteVentas) -> Resultado:
-    """Cancela un evento.
-
-    Borrador: se cancela al instante (ventas no tiene su inventario).
-    Publicado: outbox; queda `publicado` hasta que ventas confirme.
-    Ya cancelado, o con una cancelacion pendiente: no registra nada nuevo.
-    """
     evento = obtener_gestionable(session, evento_id, identidad, bloquear=True)
     if evento.estado == CANCELADO:
         session.rollback()
@@ -559,11 +496,6 @@ def cancelar(session: Session, evento_id: int, identidad: Identidad, ventas: Cli
 
 def reprogramar(session: Session, evento_id: int, identidad: Identidad, ventas: ClienteVentas,
                 fecha: datetime) -> Resultado:
-    """Cambia la fecha de inicio.
-
-    Borrador: se aplica al instante. Publicado: outbox; el evento conserva la
-    fecha anterior hasta que ventas confirme la nueva.
-    """
     evento = obtener_gestionable(session, evento_id, identidad, bloquear=True)
     try:
         momento = ahora(session)

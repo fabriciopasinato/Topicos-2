@@ -99,15 +99,13 @@ def client(db_session):
         app.dependency_overrides.clear()
 
 
-# Datos de referencia que carga una migracion (no los tests): no se vacian, o
-# los tests siguientes se quedarian, por ejemplo, sin tipos de evento.
+# Datos que carga una migracion: si se vaciaran, los tests siguientes no tendrian tipos.
 TABLAS_DE_REFERENCIA = {"tipos_evento"}
 
 
 @pytest.fixture
 def db_concurrente(engine):
-    """Engine con commits reales para tests de concurrencia. Limpia al final,
-    sin tocar los datos de referencia."""
+    """Engine con commits reales para tests de concurrencia. Limpia al final."""
     yield engine
     tablas = [t.name for t in Base.metadata.sorted_tables if t.name not in TABLAS_DE_REFERENCIA]
     if tablas:

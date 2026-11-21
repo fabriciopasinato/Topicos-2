@@ -64,8 +64,6 @@ def test_nombre_demasiado_largo_se_rechaza(db_session):
 
 @pytest.mark.concurrencia
 def test_alta_simultanea_del_mismo_organizador_deja_una_sola_fila(db_concurrente):
-    """Dos transacciones crean a la vez el organizador nuevo "Fenix" (escrito
-    distinto) y confirman: queda una sola fila y las dos obtienen el mismo id."""
     barrera = threading.Barrier(2)
     ids, errores = [], []
 
