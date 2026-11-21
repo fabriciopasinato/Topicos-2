@@ -1,6 +1,7 @@
 """Logica de negocio de eventos. Recibe una Session y no conoce HTTP."""
 
 from datetime import datetime
+from enum import StrEnum
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.cliente_ventas import ClienteVentas, VentasNoDisponible
 from app.identidad import Identidad
 from app.models import (
-    BORRADOR, FINALIZADO, GENERAL, NUMERADA, PUBLICADO, Asiento, Evento, Organizador, Participante, Recinto, Sector,
+    BORRADOR, CANCELADO, FINALIZADO, GENERAL, NUMERADA, PUBLICADO, Asiento, Evento, Organizador, Participante, Recinto, Sector,
     TipoEvento, Zona,
 )
 from app.schemas import EventoIn, EventoPatch, ZonaIn
@@ -87,6 +88,38 @@ def estado_de(evento: Evento, momento: datetime) -> str:
     return evento.estado
 
 
+class Accion(StrEnum):
+    """Lo que se le puede hacer a un evento. Que se permite en cada estado lo
+    decide una sola tabla: ACCIONES_PERMITIDAS."""
+
+    EDITAR = "editar"
+    CAMBIAR_RECINTO = "cambiar el recinto de"
+    MODIFICAR_ZONAS = "modificar las zonas de"
+    PUBLICAR = "publicar"
+    REPROGRAMAR = "reprogramar"
+    CANCELAR = "cancelar"
+    BORRAR = "borrar"
+
+
+# Matriz de que se puede hacer en cada estado (el informado, con finalizado
+# calculado). Cambiar una regla es cambiar una celda.
+ACCIONES_PERMITIDAS: dict[str, frozenset[Accion]] = {
+    BORRADOR: frozenset(Accion),  # todo
+    PUBLICADO: frozenset({Accion.EDITAR, Accion.REPROGRAMAR, Accion.CANCELAR}),
+    FINALIZADO: frozenset(),
+    CANCELADO: frozenset(),
+}
+
+
+def exigir_permitido(evento: Evento, accion: Accion, momento: datetime) -> None:
+    """Conflicto (409) si la accion no esta permitida en el estado del evento.
+    Las repeticiones idempotentes (publicar un publicado, cancelar un
+    cancelado) las resuelve cada operacion antes de llamar a esta funcion."""
+    estado = estado_de(evento, momento)
+    if accion not in ACCIONES_PERMITIDAS[estado]:
+        raise Conflicto(f"no se puede {accion} un evento {estado}")
+
+
 def listar_tipos(session: Session) -> list[TipoEvento]:
     return list(session.scalars(select(TipoEvento).order_by(TipoEvento.nombre)))
 
@@ -110,11 +143,17 @@ def puede_gestionar(evento: Evento, identidad: Identidad | None) -> bool:
     return identidad is not None and (identidad.es_admin or evento.owner_id == identidad.user_id)
 
 
+def es_publico(evento: Evento) -> bool:
+    """Publicados (incluidos los finalizados) y cancelados que llegaron a
+    publicarse: los ve cualquiera, por ejemplo desde "Mis compras". Borradores
+    y cancelados sin publicar: solo su owner y los administradores."""
+    return evento.estado == PUBLICADO or (evento.estado == CANCELADO and evento.publicado_at is not None)
+
+
 def obtener_visible(session: Session, evento_id: int, identidad: Identidad | None) -> Evento:
-    """Publicados: para todos. Borradores: solo para su owner y los admin
-    (para el resto, el evento 'no existe')."""
+    """Para quien no puede verlo, el evento 'no existe' (404)."""
     evento = session.scalar(select(Evento).where(Evento.id == evento_id).options(*_cargar_detalle()))
-    if evento is None or (evento.estado != PUBLICADO and not puede_gestionar(evento, identidad)):
+    if evento is None or (not es_publico(evento) and not puede_gestionar(evento, identidad)):
         raise NoEncontrado()
     return evento
 
@@ -131,12 +170,23 @@ def obtener_gestionable(session: Session, evento_id: int, identidad: Identidad, 
     return evento
 
 
-def listar_publicados(session: Session) -> list[Evento]:
-    return list(
-        session.scalars(
-            select(Evento).where(Evento.estado == PUBLICADO).options(*_cargar_clasificacion()).order_by(Evento.fecha)
-        )
-    )
+def listar_cartelera(session: Session, tipo: str | None = None,
+                     desde: datetime | None = None, hasta: datetime | None = None) -> list[Evento]:
+    """Eventos publicados que todavia no empezaron (reloj de la base),
+    filtrables por tipo y rango de fechas de inicio, ordenados por fecha.
+    Cancelados y finalizados no se listan."""
+    if tipo is not None:
+        _exigir_tipo(session, tipo)
+    if desde is not None and hasta is not None and desde > hasta:
+        raise Invalido("el inicio del rango no puede ser posterior a su fin")
+    consulta = select(Evento).where(Evento.estado == PUBLICADO, Evento.fecha > func.now())
+    if tipo is not None:
+        consulta = consulta.where(Evento.tipo == tipo)
+    if desde is not None:
+        consulta = consulta.where(Evento.fecha >= desde)
+    if hasta is not None:
+        consulta = consulta.where(Evento.fecha <= hasta)
+    return list(session.scalars(consulta.options(*_cargar_clasificacion()).order_by(Evento.fecha)))
 
 
 def listar_propios(session: Session, identidad: Identidad) -> list[Evento]:
@@ -153,9 +203,16 @@ def crear_recinto(session: Session, nombre: str, direccion: str) -> Recinto:
     return recinto
 
 
-def _exigir_tipo(session: Session, codigo: str) -> None:
+def _exigir_tipo(session: Session, codigo: str) -> str:
     if session.get(TipoEvento, codigo) is None:
         raise Invalido(f"el tipo de evento '{codigo}' no existe")
+    return codigo
+
+
+def _exigir_recinto(session: Session, recinto_id: int) -> int:
+    if session.get(Recinto, recinto_id) is None:
+        raise Invalido("el recinto no existe")
+    return recinto_id
 
 
 def _participantes(session: Session, nombres: list[str]) -> list[Participante]:
@@ -189,23 +246,41 @@ def crear_evento(session: Session, datos: EventoIn, identidad: Identidad) -> Eve
 
 
 def editar_evento(session: Session, evento_id: int, datos: EventoPatch, identidad: Identidad) -> Evento:
-    evento = obtener_gestionable(session, evento_id, identidad)
-    if datos.nombre is not None:
-        evento.nombre = datos.nombre
-    if datos.fecha is not None:
-        evento.fecha = datos.fecha
+    """Edita datos descriptivos de un evento en borrador o publicado vigente.
+    No avisa a ventas: ninguno de estos datos esta replicado alla."""
+    evento = obtener_gestionable(session, evento_id, identidad, bloquear=True)
+    cambios = datos.model_dump(exclude_unset=True, exclude_none=True)  # solo lo que se mando
+    try:
+        momento = ahora(session)
+        exigir_permitido(evento, Accion.EDITAR, momento)
+        if "recinto_id" in cambios and cambios["recinto_id"] != evento.recinto_id:
+            exigir_permitido(evento, Accion.CAMBIAR_RECINTO, momento)
+            evento.recinto_id = _exigir_recinto(session, cambios["recinto_id"])
+
+        for campo in ("nombre", "descripcion"):  # asignacion directa
+            if campo in cambios:
+                setattr(evento, campo, cambios[campo])
+        # Los que validan o buscan algo, uno por uno:
+        if "tipo" in cambios:
+            evento.tipo = _exigir_tipo(session, cambios["tipo"])
+        if "organizador" in cambios:
+            evento.organizador = buscar_o_crear(session, Organizador, cambios["organizador"])
+        if "participantes" in cambios:
+            evento.participantes = _participantes(session, cambios["participantes"])
+    except (Conflicto, Invalido):
+        session.rollback()  # libera el lock y descarta lo creado a medias
+        raise
     session.commit()
     return evento
 
 
-def _exigir_borrador(evento: Evento) -> None:
-    if evento.estado != BORRADOR:
-        raise Conflicto("las zonas de un evento publicado no se pueden modificar")
+def _exigir_zonas_modificables(session: Session, evento: Evento) -> None:
+    exigir_permitido(evento, Accion.MODIFICAR_ZONAS, ahora(session))
 
 
 def crear_sector(session: Session, evento_id: int, nombre: str, identidad: Identidad) -> Sector:
     evento = obtener_gestionable(session, evento_id, identidad)
-    _exigir_borrador(evento)
+    _exigir_zonas_modificables(session, evento)
     sector = Sector(evento_id=evento.id, nombre=nombre)
     session.add(sector)
     session.commit()
@@ -214,7 +289,7 @@ def crear_sector(session: Session, evento_id: int, nombre: str, identidad: Ident
 
 def crear_zona(session: Session, evento_id: int, sector_id: int, datos: ZonaIn, identidad: Identidad) -> Zona:
     evento = obtener_gestionable(session, evento_id, identidad)
-    _exigir_borrador(evento)
+    _exigir_zonas_modificables(session, evento)
     sector = session.get(Sector, sector_id)
     if sector is None or sector.evento_id != evento.id:
         raise NoEncontrado()
@@ -244,13 +319,14 @@ def borrar_zona(session: Session, evento_id: int, zona_id: int, identidad: Ident
     zona = session.get(Zona, zona_id)
     if zona is None or zona.sector.evento_id != evento.id:
         raise NoEncontrado()
-    _exigir_borrador(evento)
+    _exigir_zonas_modificables(session, evento)
     session.delete(zona)
     session.commit()
 
 
 def inventario_de(evento: Evento) -> dict:
-    """Lo que ventas necesita para vender: zonas, asientos y precios."""
+    """Lo que ventas necesita para vender: zonas, asientos, precios y la fecha
+    de inicio (con la que ventas cierra la venta sin consultar a eventos)."""
     zonas = []
     for sector in evento.sectores:
         for zona in sector.zonas:
@@ -260,7 +336,7 @@ def inventario_de(evento: Evento) -> dict:
             else:
                 item["capacidad"] = zona.capacidad
             zonas.append(item)
-    return {"evento_id": evento.id, "zonas": zonas}
+    return {"evento_id": evento.id, "zonas": zonas, "fecha_inicio": evento.fecha.isoformat()}
 
 
 def publicar(session: Session, evento_id: int, identidad: Identidad, ventas: ClienteVentas) -> Evento:
@@ -271,6 +347,14 @@ def publicar(session: Session, evento_id: int, identidad: Identidad, ventas: Cli
     if evento.estado == PUBLICADO:
         session.rollback()
         return obtener_visible(session, evento_id, identidad)
+    try:
+        exigir_permitido(evento, Accion.PUBLICAR, ahora(session))
+    except Conflicto:
+        session.rollback()
+        raise
+    if evento.fecha <= ahora(session):
+        session.rollback()
+        raise Invalido("no se puede publicar un evento cuya fecha de inicio ya paso")
 
     evento = session.scalar(
         select(Evento).where(Evento.id == evento_id).options(*_cargar_detalle()).execution_options(populate_existing=True)
@@ -287,5 +371,6 @@ def publicar(session: Session, evento_id: int, identidad: Identidad, ventas: Cli
         raise
 
     evento.estado = PUBLICADO
+    evento.publicado_at = func.now()
     session.commit()
     return evento

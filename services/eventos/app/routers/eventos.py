@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
@@ -63,8 +64,16 @@ def crear_recinto(datos: RecintoIn, session: Session = Depends(get_session), _: 
 
 # --- Eventos --------------------------------------------------------------
 @router.get("", response_model=list[EventoResumen])
-def cartelera(session: Session = Depends(get_session)):
-    return _resumenes(session, servicio.listar_publicados(session))
+def cartelera(
+    tipo: str | None = None,
+    desde: datetime | None = None,
+    hasta: datetime | None = None,
+    session: Session = Depends(get_session),
+):
+    """Cartelera publica: publicados que todavia no empezaron. Filtros
+    opcionales y combinables: tipo y rango de fechas de inicio."""
+    with _errores():
+        return _resumenes(session, servicio.listar_cartelera(session, tipo, desde, hasta))
 
 
 @router.get("/tipos", response_model=list[TipoEventoOut])

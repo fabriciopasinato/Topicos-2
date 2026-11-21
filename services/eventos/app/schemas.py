@@ -42,8 +42,23 @@ class EventoIn(BaseModel):
 
 
 class EventoPatch(BaseModel):
+    """Edicion de datos descriptivos. La fecha NO se edita aca: se cambia con
+    la reprogramacion, que avisa a ventas. Los campos ausentes no cambian;
+    `participantes` reemplaza la lista completa."""
+
     nombre: str | None = Field(default=None, min_length=1, max_length=200)
-    fecha: datetime | None = None
+    descripcion: str | None = Field(default=None, max_length=5000)
+    tipo: str | None = Field(default=None, min_length=1, max_length=30)
+    organizador: str | None = Field(default=None, max_length=200)
+    participantes: list[str] | None = Field(default=None, max_length=50)
+    recinto_id: int | None = None  # solo en borrador
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sin_fecha(cls, datos):
+        if isinstance(datos, dict) and "fecha" in datos:
+            raise ValueError("la fecha no se edita: se cambia con POST /eventos/{id}/reprogramar")
+        return datos
 
 
 class SectorIn(BaseModel):

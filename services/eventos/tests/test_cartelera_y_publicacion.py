@@ -1,6 +1,9 @@
 """6.3 Cartelera publica y 6.4 publicacion con entrega de inventario a ventas."""
 
+from datetime import datetime
+
 import pytest
+from sqlalchemy import text
 
 from app.cliente_ventas import VentasNoDisponible, get_cliente_ventas
 from app.main import app
@@ -84,6 +87,29 @@ def test_publicacion_exitosa_entrega_inventario(client, evento_con_zonas, ventas
     general = next(z for z in inventario["zonas"] if z["tipo"] == "general")
     assert len(numerada["asientos"]) == 6 and numerada["precio"] == "1500.00"
     assert general["capacidad"] == 500
+    assert datetime.fromisoformat(inventario["fecha_inicio"]) == datetime.fromisoformat(evento_con_zonas["fecha"])
+
+
+def test_publicacion_registra_publicado_at(client, evento_con_zonas, ventas, db_session):
+    _publicar(client, evento_con_zonas)
+    publicado_at = db_session.scalar(text("SELECT publicado_at FROM eventos WHERE id = :e"), {"e": evento_con_zonas["id"]})
+    assert publicado_at is not None
+
+
+def test_publicacion_con_fecha_pasada_responde_422(client, evento_con_zonas, ventas, db_session):
+    db_session.execute(text("UPDATE eventos SET fecha = now() - interval '1 hour' WHERE id = :e"),
+                       {"e": evento_con_zonas["id"]})
+    db_session.expire_all()
+    assert _publicar(client, evento_con_zonas).status_code == 422
+    assert ventas.recibidos == []
+    assert client.get(f"/eventos/{evento_con_zonas['id']}", headers=OWNER).json()["estado"] == "borrador"
+
+
+def test_un_evento_cancelado_no_se_publica(client, evento_con_zonas, ventas, db_session):
+    db_session.execute(text("UPDATE eventos SET estado = 'cancelado' WHERE id = :e"), {"e": evento_con_zonas["id"]})
+    db_session.expire_all()
+    assert _publicar(client, evento_con_zonas).status_code == 409
+    assert ventas.recibidos == []
 
 
 def test_ventas_caido_deja_el_evento_en_borrador(client, evento_con_zonas, ventas):
