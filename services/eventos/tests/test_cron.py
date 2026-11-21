@@ -202,3 +202,48 @@ def test_la_configuracion_del_cron_se_lee_del_entorno(monkeypatch):
     monkeypatch.setenv("CRON_LOTE", "7")
     s = Settings()
     assert (s.cron_intervalo_segundos, s.cron_lote) == (2.0, 7)
+
+
+class VentasQueCuenta(VentasFalsa):
+    def __init__(self, sin_inventario=()):
+        super().__init__()
+        self.intentos = 0
+        self.sin_inventario = set(sin_inventario)
+
+    def actualizar_evento(self, evento_id, version, **cambios):
+        from app.cliente_ventas import InventarioInexistente
+
+        self.intentos += 1
+        if evento_id in self.sin_inventario:
+            raise InventarioInexistente("404")
+        super().actualizar_evento(evento_id, version, **cambios)
+
+
+def test_con_ventas_caido_el_ciclo_se_corta_en_el_primer_fallo(db_concurrente, nuevo_evento):
+    ventas = VentasQueCuenta()
+    for evento_id in [nuevo_evento() for _ in range(3)]:
+        ventas.eventos[evento_id] = {"version": 0, "fecha_inicio": None, "cancelado": False}
+        _pendiente(db_concurrente, ventas, evento_id, servicio.cancelar)
+    _vencer_reintentos(db_concurrente)
+    ventas.intentos = 0
+    ventas.caida = True
+
+    assert cron.ciclo(_sesion(db_concurrente), ventas, lote=20) == 1
+    assert ventas.intentos == 1
+    with db_concurrente.connect() as c:
+        intentos = c.execute(text("SELECT intentos FROM operaciones_ventas ORDER BY id")).scalars().all()
+    assert intentos == [2, 1, 1]  # solo la primera se reintento; las otras esperan al proximo ciclo
+
+
+def test_un_404_no_corta_el_ciclo(db_concurrente, nuevo_evento):
+    ids = [nuevo_evento() for _ in range(2)]
+    ventas = VentasQueCuenta(sin_inventario={ids[0]})
+    for evento_id in ids:
+        ventas.eventos[evento_id] = {"version": 0, "fecha_inicio": None, "cancelado": False}
+        _pendiente(db_concurrente, ventas, evento_id, servicio.cancelar)
+    _vencer_reintentos(db_concurrente)
+
+    assert cron.ciclo(_sesion(db_concurrente), ventas, lote=20) == 2
+    with db_concurrente.connect() as c:
+        estados = dict(c.execute(text("SELECT evento_id, estado FROM operaciones_ventas")).all())
+    assert estados == {ids[0]: "pendiente", ids[1]: "confirmada"}

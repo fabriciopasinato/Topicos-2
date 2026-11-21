@@ -44,7 +44,7 @@
 ## 7. Verificación integrada
 
 - [ ] 7.1 Verificar que el CI existente corre los tests nuevos de eventos (incluidos los del cron) y de ventas, y los del frontend, y que su validación de `docker compose config` incluye `eventos-cron`. Verificar con el PR en verde.
-- [ ] 7.2 Con el stack levantado por `docker compose up -d`, recorrer de punta a punta: un owner crea un evento con clasificación, arma zonas y lo publica; un cliente filtra la cartelera y reserva; el owner lo reprograma y ventas cierra la venta en la nueva fecha; con `ventas` detenido el owner lo cancela y recibe 202; al levantar `ventas`, el cron completa la cancelación y una reserva nueva recibe 409; y un borrador se borra. Verificar también que todas esas solicitudes figuran en la bitácora de `gateway_db`.
+- [x] 7.2 Con el stack levantado por `docker compose up -d`, recorrer de punta a punta: un owner crea un evento con clasificación, arma zonas y lo publica; un cliente filtra la cartelera y reserva; el owner lo reprograma y ventas cierra la venta en la nueva fecha; con `ventas` detenido el owner lo cancela y recibe 202; al levantar `ventas`, el cron completa la cancelación y una reserva nueva recibe 409; y un borrador se borra. Verificar también que todas esas solicitudes figuran en la bitácora de `gateway_db`.
 
 ## Workflow follow-up
 

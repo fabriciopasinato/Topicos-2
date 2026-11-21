@@ -8,13 +8,14 @@ import logging
 import sys
 import time
 from collections.abc import Callable
+from enum import StrEnum
 from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import servicio
-from app.cliente_ventas import ClienteVentas, VentasNoDisponible, get_cliente_ventas
+from app.cliente_ventas import ClienteVentas, InventarioInexistente, VentasNoDisponible, get_cliente_ventas
 from app.config import get_settings
 from app.db import get_engine
 from app.models import EstadoOperacion, OperacionVentas
@@ -22,8 +23,14 @@ from app.models import EstadoOperacion, OperacionVentas
 log = logging.getLogger("eventos-cron")
 
 
-def procesar_una(session: Session, ventas: ClienteVentas) -> bool:
-    """Devuelve False si no habia ninguna operacion disponible."""
+class Intento(StrEnum):
+    NINGUNA = "ninguna"
+    CONFIRMADA = "confirmada"
+    POSTERGADA = "postergada"  # ventas respondio, pero no pudo aplicarla (404)
+    VENTAS_NO_RESPONDE = "ventas_no_responde"
+
+
+def procesar_una(session: Session, ventas: ClienteVentas) -> Intento:
     op = session.scalar(
         select(OperacionVentas)
         .where(OperacionVentas.estado == EstadoOperacion.PENDIENTE, OperacionVentas.proximo_intento_at <= func.now())
@@ -33,7 +40,7 @@ def procesar_una(session: Session, ventas: ClienteVentas) -> bool:
     )
     if op is None:
         session.rollback()
-        return False
+        return Intento.NINGUNA
 
     op_id, evento_id, tipo, version, intento = op.id, op.evento_id, op.tipo, op.version, op.intentos + 1
     cambios = servicio.EFECTOS[op.tipo].cambios_para_ventas(op)
@@ -44,19 +51,22 @@ def procesar_una(session: Session, ventas: ClienteVentas) -> bool:
         log.warning("operacion %s (evento %s, %s v%s) sin confirmar, intento %s: %s",
                     op_id, evento_id, tipo, version, intento, error)
         servicio.registrar_fallo(session, op_id, error)
-        return True
+        return Intento.POSTERGADA if isinstance(error, InventarioInexistente) else Intento.VENTAS_NO_RESPONDE
     servicio.aplicar(session, op_id)
     log.info("operacion %s (evento %s, %s v%s) confirmada en el intento %s", op_id, evento_id, tipo, version, intento)
-    return True
+    return Intento.CONFIRMADA
 
 
 def ciclo(nueva_sesion: Callable[[], Session], ventas: ClienteVentas, lote: int) -> int:
     procesadas = 0
     while procesadas < lote:
         with nueva_sesion() as session:
-            if not procesar_una(session, ventas):
-                break
+            intento = procesar_una(session, ventas)
+        if intento == Intento.NINGUNA:
+            break
         procesadas += 1
+        if intento == Intento.VENTAS_NO_RESPONDE:
+            break  # las demas fallarian igual (y con ventas colgado, cada una esperaria el timeout)
     return procesadas
 
 
