@@ -132,6 +132,10 @@ class OperacionPendienteOut(BaseModel):
     intentos: int
 
 
+class EventoPropio(EventoResumen):
+    operaciones_pendientes: list[OperacionPendienteOut] = []
+
+
 class EventoDetalle(EventoResumen):
     descripcion: str = ""
     sectores: list[SectorOut] = []

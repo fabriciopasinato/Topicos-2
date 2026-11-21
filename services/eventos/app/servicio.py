@@ -423,6 +423,17 @@ def operaciones_pendientes(session: Session, evento_id: int) -> list[OperacionVe
     ))
 
 
+def pendientes_por_evento(session: Session, evento_ids: list[int]) -> dict[int, list[OperacionVentas]]:
+    resultado: dict[int, list[OperacionVentas]] = {}
+    for op in session.scalars(
+        select(OperacionVentas)
+        .where(OperacionVentas.evento_id.in_(evento_ids), OperacionVentas.estado == EstadoOperacion.PENDIENTE)
+        .order_by(OperacionVentas.id)
+    ):
+        resultado.setdefault(op.evento_id, []).append(op)
+    return resultado
+
+
 def _hay_cancelacion_pendiente(session: Session, evento_id: int) -> bool:
     return session.scalar(
         select(func.count()).select_from(OperacionVentas).where(

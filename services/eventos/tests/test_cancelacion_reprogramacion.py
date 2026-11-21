@@ -185,3 +185,10 @@ def test_reprogramacion_pendiente_no_bloquea_cancelar(client, publicado, ventas)
     assert _cancelar(client, publicado["id"]).status_code == 202
     tipos = [op["tipo"] for op in _detalle(client, publicado["id"])["operaciones_pendientes"]]
     assert tipos == ["reprogramar", "cancelar"]
+
+
+def test_mis_eventos_muestra_las_operaciones_pendientes(client, publicado, borrador, ventas):
+    ventas.caida = True
+    _cancelar(client, publicado["id"])
+    mios = {e["id"]: e for e in client.get("/eventos/mios", headers=OWNER).json()}
+    assert [op["tipo"] for op in mios[publicado["id"]]["operaciones_pendientes"]] == ["cancelar"]

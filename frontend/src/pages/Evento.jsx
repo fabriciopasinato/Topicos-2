@@ -3,7 +3,12 @@ import { useNavigate, useParams } from "react-router-dom";
 import { api, mensajeDeError } from "../api/client.js";
 import Mensaje from "../components/Mensaje.jsx";
 import { useSesion } from "../auth/sesion.jsx";
-import { formatearFecha } from "./Cartelera.jsx";
+import { Clasificacion, formatearFecha } from "./Cartelera.jsx";
+
+const AVISO_NO_A_LA_VENTA = {
+  cancelado: "Este evento fue cancelado.",
+  finalizado: "Este evento ya comenzó: la venta está cerrada.",
+};
 
 function nuevaClave() {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -65,6 +70,7 @@ export default function Evento() {
   const [cantidades, setCantidades] = useState({});
   const [error, setError] = useState("");
   const [enviando, setEnviando] = useState(false);
+  const [tipos, setTipos] = useState([]);
   // Una clave por intento de reserva: se reutiliza en los reintentos y se
   // renueva cuando cambia la selección.
   const clave = useRef(nuevaClave());
@@ -85,6 +91,10 @@ export default function Evento() {
   useEffect(() => {
     cargar();
   }, [cargar]);
+
+  useEffect(() => {
+    api("/api/eventos/tipos").then(setTipos).catch(() => setTipos([]));
+  }, []);
 
   function cambioSeleccion(fn) {
     clave.current = nuevaClave();
@@ -138,12 +148,19 @@ export default function Evento() {
 
   if (!evento) return error ? <Mensaje>{error}</Mensaje> : <p>Cargando evento…</p>;
 
+  const aviso = AVISO_NO_A_LA_VENTA[evento.estado];
+
   return (
     <section>
       <h1>{evento.nombre}</h1>
       <p>
         {formatearFecha(evento.fecha)} · {evento.recinto.nombre}
       </p>
+      <Clasificacion evento={evento} tipos={tipos} />
+      {evento.descripcion && <p>{evento.descripcion}</p>}
+      {aviso && <Mensaje tipo="info">{aviso}</Mensaje>}
+      {!aviso && (
+        <>
 
       {zonas.map((z) => (
         <article key={z.id} className="tarjeta">
@@ -177,6 +194,8 @@ export default function Evento() {
       <button type="button" disabled={total === 0 || enviando} onClick={reservar}>
         Reservar{total > 0 ? ` (${total})` : ""}
       </button>
+        </>
+      )}
     </section>
   );
 }

@@ -28,6 +28,11 @@ export const EVENTO = {
   estado: "publicado",
   owner_id: 10,
   recinto: { id: 1, nombre: "Estadio Central", direccion: "" },
+  tipo: "recital",
+  organizador: { id: 1, nombre: "DF Entertainment" },
+  participantes: [{ id: 1, nombre: "Los Piojos" }],
+  descripcion: "",
+  operaciones_pendientes: [],
   sectores: [
     {
       id: 1,
@@ -54,3 +59,10 @@ export const DISPONIBILIDAD = {
     { zona_id: 20, tipo: "general", precio: 800, disponibles: 10, total: 10, asientos: [] },
   ],
 };
+
+export const TIPOS = [
+  { codigo: "recital", nombre: "Recital" },
+  { codigo: "teatro", nombre: "Teatro" },
+];
+
+export const RECINTOS = [{ id: 1, nombre: "Estadio Central", direccion: "" }];

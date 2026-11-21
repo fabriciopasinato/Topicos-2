@@ -11,7 +11,7 @@ from app.cliente_ventas import ClienteVentas, VentasNoDisponible, get_cliente_ve
 from app.db import get_session
 from app.identidad import ROL_ADMINISTRADOR, ROL_EVENT_OWNER, Identidad, identidad_opcional, requiere_rol
 from app.schemas import (
-    EventoDetalle, EventoIn, EventoPatch, EventoResumen, OperacionPendienteOut, RecintoIn, RecintoOut,
+    EventoDetalle, EventoIn, EventoPatch, EventoPropio, EventoResumen, OperacionPendienteOut, RecintoIn, RecintoOut,
     ReprogramacionIn, SectorIn, SectorOut, TipoEventoOut, ZonaIn, ZonaOut,
 )
 
@@ -84,9 +84,19 @@ def tipos(session: Session = Depends(get_session)):
     return [TipoEventoOut.model_validate(t, from_attributes=True) for t in servicio.listar_tipos(session)]
 
 
-@router.get("/mios", response_model=list[EventoResumen])
+@router.get("/mios", response_model=list[EventoPropio])
 def mis_eventos(session: Session = Depends(get_session), identidad: Identidad = Depends(gestor)):
-    return _resumenes(session, servicio.listar_propios(session, identidad))
+    eventos = servicio.listar_propios(session, identidad)
+    pendientes = servicio.pendientes_por_evento(session, [e.id for e in eventos])
+    return [
+        EventoPropio(
+            **resumen.model_dump(),
+            operaciones_pendientes=[
+                OperacionPendienteOut.model_validate(op, from_attributes=True) for op in pendientes.get(resumen.id, [])
+            ],
+        )
+        for resumen in _resumenes(session, eventos)
+    ]
 
 
 @router.get("/{evento_id}", response_model=EventoDetalle)

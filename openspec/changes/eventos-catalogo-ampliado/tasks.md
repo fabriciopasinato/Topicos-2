@@ -35,11 +35,11 @@
 
 ## 6. Frontend del event owner
 
-- [ ] 6.1 Traer `dev` a la rama si el change de auth ya está mergeado y reutilizar `SoloRol`; si no, agregar una protección de rutas por rol equivalente. Crear la vista "Mis eventos" bajo `/owner`, con estado (incluido `finalizado`) y operaciones pendientes. Verificar con tests de componentes usando MSW: listado, acceso denegado para un cliente, y aviso de operación pendiente.
-- [ ] 6.2 Implementar el formulario de alta y edición del evento (nombre, fecha solo en el alta, recinto solo en borrador, tipo, organizador, participantes y descripción) con manejo de 422 y 409. Verificar con tests de componentes usando MSW.
-- [ ] 6.3 Implementar el armado de sectores y zonas (numerada con filas y asientos por fila, general con capacidad, precio) y el borrado de zonas en borrador, más el botón de publicar con manejo de 503 y 422. Verificar con tests de componentes usando MSW.
-- [ ] 6.4 Implementar reprogramar, cancelar (con confirmación) y borrar, mostrando el resultado 200 o el aviso de "en proceso" del 202. Verificar con tests de componentes usando MSW.
-- [ ] 6.5 Agregar a la cartelera pública los filtros por tipo y rango de fechas, y mostrar tipo, organizador y participantes en el detalle, con el aviso de evento cancelado o finalizado. Verificar con tests de componentes usando MSW, actualizando los tests existentes de cartelera y detalle.
+- [x] 6.1 Traer `dev` a la rama si el change de auth ya está mergeado y reutilizar `SoloRol`; si no, agregar una protección de rutas por rol equivalente. Crear la vista "Mis eventos" bajo `/owner`, con estado (incluido `finalizado`) y operaciones pendientes. Verificar con tests de componentes usando MSW: listado, acceso denegado para un cliente, y aviso de operación pendiente.
+- [x] 6.2 Implementar el formulario de alta y edición del evento (nombre, fecha solo en el alta, recinto solo en borrador, tipo, organizador, participantes y descripción) con manejo de 422 y 409. Verificar con tests de componentes usando MSW.
+- [x] 6.3 Implementar el armado de sectores y zonas (numerada con filas y asientos por fila, general con capacidad, precio) y el borrado de zonas en borrador, más el botón de publicar con manejo de 503 y 422. Verificar con tests de componentes usando MSW.
+- [x] 6.4 Implementar reprogramar, cancelar (con confirmación) y borrar, mostrando el resultado 200 o el aviso de "en proceso" del 202. Verificar con tests de componentes usando MSW.
+- [x] 6.5 Agregar a la cartelera pública los filtros por tipo y rango de fechas, y mostrar tipo, organizador y participantes en el detalle, con el aviso de evento cancelado o finalizado. Verificar con tests de componentes usando MSW, actualizando los tests existentes de cartelera y detalle.
 
 ## 7. Verificación integrada
 
