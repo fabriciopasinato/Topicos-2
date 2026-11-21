@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     ventas_url: str = "http://ventas:8003"
     ventas_timeout_segundos: float = 2.0
 
+    cron_intervalo_segundos: float = 5.0
+    cron_lote: int = 20
+    cron_latido: str = "/tmp/cron-heartbeat"
+
 
 @lru_cache
 def get_settings() -> Settings:
