@@ -10,7 +10,8 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
-    CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, func, text,
+    Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, false, func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -26,12 +27,19 @@ CANCELADA = "cancelada"
 
 
 class InventarioEvento(Base):
-    """Marca que el inventario de un evento ya fue recibido (idempotencia)."""
+    """Marca que el inventario de un evento ya fue recibido (idempotencia) y
+    guarda la copia del estado del evento que decide eventos: fecha de inicio
+    y cancelacion. Ventas nunca los cambia por su cuenta: solo los actualiza
+    eventos, con una `version` creciente que hace idempotentes los reenvios."""
 
     __tablename__ = "inventario_eventos"
 
     evento_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Nula en inventarios anteriores a este dato: sin fecha no se cierra la venta.
+    fecha_inicio: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelado: Mapped[bool] = mapped_column(Boolean, server_default=false(), default=False)
+    version: Mapped[int] = mapped_column(Integer, server_default="0", default=0)
 
 
 class Reserva(Base):

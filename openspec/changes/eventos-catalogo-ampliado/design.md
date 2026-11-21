@@ -155,6 +155,7 @@ Son rutas bajo `/owner`, visibles para `event_owner` y `administrador`: "Mis eve
 - **[Eventos existentes sin tipo ni organizador]** -> La migración pone `tipo = 'otro'` y deja `organizador_id` nullable en la base. La API lo exige en las altas nuevas.
 - **[Desfase de reloj entre servicios]** -> Los dos usan `now()` del mismo PostgreSQL.
 - **[El envío inmediato y el cron mandan la misma operación al mismo tiempo]** -> Ventas lo absorbe por versión, y `aplicar` es idempotente.
+- **[Deltas con una sola versión por evento: cambios de campos distintos que llegan desordenados se pisan]** -> Cada mensaje a `PUT /internal/eventos/{id}` lleva solo lo que cambió, y ventas ignora toda versión menor a la última aplicada. Hoy es seguro porque hay solo dos tipos de cambio: la cancelación es final, y una cancelación pendiente bloquea las reprogramaciones nuevas. Si en el futuro ventas replica más datos del evento (por ejemplo el nombre para "Mis compras"), un cambio de nombre v2 que llega después de una reprogramación v3 se ignoraría y se perdería. Cuando se agregue un campo replicado, cada mensaje tiene que pasar a llevar la foto completa de los datos replicados en lugar del delta.
 
 ## Migration Plan
 
