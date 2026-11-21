@@ -1,11 +1,17 @@
 """Logica de negocio de eventos. Recibe una Session y no conoce HTTP."""
 
-from sqlalchemy import select
+from datetime import datetime
+
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
 from app.cliente_ventas import ClienteVentas, VentasNoDisponible
 from app.identidad import Identidad
-from app.models import BORRADOR, GENERAL, NUMERADA, PUBLICADO, Asiento, Evento, Recinto, Sector, Zona
+from app.models import (
+    BORRADOR, FINALIZADO, GENERAL, NUMERADA, PUBLICADO, Asiento, Evento, Organizador, Participante, Recinto, Sector,
+    TipoEvento, Zona,
+)
 from app.schemas import EventoIn, EventoPatch, ZonaIn
 
 
@@ -25,9 +31,77 @@ class Invalido(Exception):
     pass
 
 
-def _cargar_detalle():
+LARGO_MAXIMO_NOMBRE = 200
+
+
+def limpiar_nombre(nombre: str) -> str:
+    """Sin espacios al principio ni al final y con los internos colapsados.
+    Es como se guarda y se muestra el nombre."""
+    return " ".join(nombre.split())
+
+
+def normalizar_nombre(nombre: str) -> str:
+    """Clave de unicidad: el nombre limpio y sin distinguir mayusculas.
+    " los  PIOJOS " y "Los Piojos" tienen la misma clave."""
+    return limpiar_nombre(nombre).casefold()
+
+
+def buscar_o_crear(session: Session, modelo: type[Organizador] | type[Participante], nombre: str):
+    """Devuelve el organizador o participante con ese nombre (sin distinguir
+    mayusculas ni espacios) y lo crea si no existe.
+
+    INSERT ... ON CONFLICT DO NOTHING sobre la clave unica: si otra transaccion
+    esta insertando la misma clave, este INSERT espera a que termine; si ella
+    confirma, no inserta nada y el SELECT siguiente ve su fila. Asi dos altas
+    simultaneas del mismo nombre terminan en una sola fila, sin capturar
+    errores de integridad. No hace commit: es parte de la transaccion de quien llama.
+    """
+    limpio = limpiar_nombre(nombre)
+    if not limpio:
+        raise Invalido("el nombre no puede estar vacio")
+    if len(limpio) > LARGO_MAXIMO_NOMBRE:
+        raise Invalido(f"el nombre admite como maximo {LARGO_MAXIMO_NOMBRE} caracteres")
+    clave = limpio.casefold()
+
+    nuevo_id = session.execute(
+        pg_insert(modelo).values(nombre=limpio, clave=clave)
+        .on_conflict_do_nothing(index_elements=["clave"])
+        .returning(modelo.id)
+    ).scalar()
+    if nuevo_id is None:
+        nuevo_id = session.scalar(select(modelo.id).where(modelo.clave == clave))
+    return session.get(modelo, nuevo_id)
+
+
+def ahora(session: Session) -> datetime:
+    """Reloj de la base, el mismo que usa ventas para cerrar la venta: asi los
+    dos servicios coinciden en cuando empezo un evento."""
+    return session.scalar(select(func.now()))
+
+
+def estado_de(evento: Evento, momento: datetime) -> str:
+    """Estado informado: el guardado, salvo un evento publicado cuya fecha de
+    inicio ya llego, que se informa `finalizado` (no se guarda)."""
+    if evento.estado == PUBLICADO and evento.fecha <= momento:
+        return FINALIZADO
+    return evento.estado
+
+
+def listar_tipos(session: Session) -> list[TipoEvento]:
+    return list(session.scalars(select(TipoEvento).order_by(TipoEvento.nombre)))
+
+
+def _cargar_clasificacion():
     return (
         selectinload(Evento.recinto),
+        selectinload(Evento.organizador),
+        selectinload(Evento.participantes),
+    )
+
+
+def _cargar_detalle():
+    return (
+        *_cargar_clasificacion(),
         selectinload(Evento.sectores).selectinload(Sector.zonas).selectinload(Zona.asientos),
     )
 
@@ -60,13 +134,13 @@ def obtener_gestionable(session: Session, evento_id: int, identidad: Identidad, 
 def listar_publicados(session: Session) -> list[Evento]:
     return list(
         session.scalars(
-            select(Evento).where(Evento.estado == PUBLICADO).options(selectinload(Evento.recinto)).order_by(Evento.fecha)
+            select(Evento).where(Evento.estado == PUBLICADO).options(*_cargar_clasificacion()).order_by(Evento.fecha)
         )
     )
 
 
 def listar_propios(session: Session, identidad: Identidad) -> list[Evento]:
-    consulta = select(Evento).options(selectinload(Evento.recinto)).order_by(Evento.id)
+    consulta = select(Evento).options(*_cargar_clasificacion()).order_by(Evento.id)
     if not identidad.es_admin:
         consulta = consulta.where(Evento.owner_id == identidad.user_id)
     return list(session.scalars(consulta))
@@ -79,12 +153,35 @@ def crear_recinto(session: Session, nombre: str, direccion: str) -> Recinto:
     return recinto
 
 
+def _exigir_tipo(session: Session, codigo: str) -> None:
+    if session.get(TipoEvento, codigo) is None:
+        raise Invalido(f"el tipo de evento '{codigo}' no existe")
+
+
+def _participantes(session: Session, nombres: list[str]) -> list[Participante]:
+    """Busca o crea cada participante; un mismo participante indicado dos
+    veces (aunque se escriba distinto) queda una sola vez."""
+    unicos: dict[int, Participante] = {}
+    for nombre in nombres:
+        participante = buscar_o_crear(session, Participante, nombre)
+        unicos.setdefault(participante.id, participante)
+    return list(unicos.values())
+
+
 def crear_evento(session: Session, datos: EventoIn, identidad: Identidad) -> Evento:
     if session.get(Recinto, datos.recinto_id) is None:
         raise Invalido("el recinto no existe")
+    try:
+        _exigir_tipo(session, datos.tipo)
+        organizador = buscar_o_crear(session, Organizador, datos.organizador)
+        participantes = _participantes(session, datos.participantes)
+    except Invalido:
+        session.rollback()  # descarta organizadores o participantes ya creados
+        raise
     evento = Evento(
         owner_id=identidad.user_id, nombre=datos.nombre, fecha=datos.fecha,
-        recinto_id=datos.recinto_id, estado=BORRADOR,
+        recinto_id=datos.recinto_id, estado=BORRADOR, tipo=datos.tipo,
+        descripcion=datos.descripcion, organizador=organizador, participantes=participantes,
     )
     session.add(evento)
     session.commit()

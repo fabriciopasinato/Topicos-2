@@ -4,6 +4,7 @@ import pytest
 
 from app.cliente_ventas import VentasNoDisponible, get_cliente_ventas
 from app.main import app
+from tests.helpers import datos_evento
 
 OWNER = {"X-User-Id": "10", "X-User-Role": "event_owner"}
 CLIENTE = {"X-User-Id": "20", "X-User-Role": "cliente"}
@@ -32,8 +33,7 @@ def ventas(client):
 @pytest.fixture
 def evento(client):
     recinto = client.post("/eventos/recintos", json={"nombre": "Estadio"}, headers=OWNER).json()
-    ev = client.post("/eventos", json={"nombre": "Recital", "fecha": "2026-12-20T21:00:00Z",
-                                       "recinto_id": recinto["id"]}, headers=OWNER).json()
+    ev = client.post("/eventos", json=datos_evento(recinto["id"]), headers=OWNER).json()
     return ev
 
 

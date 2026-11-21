@@ -10,7 +10,8 @@ from app.cliente_ventas import ClienteVentas, VentasNoDisponible, get_cliente_ve
 from app.db import get_session
 from app.identidad import ROL_ADMINISTRADOR, ROL_EVENT_OWNER, Identidad, identidad_opcional, requiere_rol
 from app.schemas import (
-    EventoDetalle, EventoIn, EventoPatch, EventoResumen, RecintoIn, RecintoOut, SectorIn, SectorOut, ZonaIn, ZonaOut,
+    EventoDetalle, EventoIn, EventoPatch, EventoResumen, RecintoIn, RecintoOut, SectorIn, SectorOut, TipoEventoOut,
+    ZonaIn, ZonaOut,
 )
 
 router = APIRouter(prefix="/eventos")
@@ -34,12 +35,18 @@ def _errores():
         raise HTTPException(status_code=503, detail="ventas no disponible: el evento sigue en borrador")
 
 
-def _detalle(evento) -> EventoDetalle:
-    return EventoDetalle.model_validate(evento, from_attributes=True)
+def _detalle(session: Session, evento) -> EventoDetalle:
+    """Detalle con el estado calculado (finalizado) segun el reloj de la base."""
+    estado = servicio.estado_de(evento, servicio.ahora(session))
+    return EventoDetalle.model_validate(evento, from_attributes=True).model_copy(update={"estado": estado})
 
 
-def _resumen(evento) -> EventoResumen:
-    return EventoResumen.model_validate(evento, from_attributes=True)
+def _resumenes(session: Session, eventos) -> list[EventoResumen]:
+    momento = servicio.ahora(session)
+    return [
+        EventoResumen.model_validate(e, from_attributes=True).model_copy(update={"estado": servicio.estado_de(e, momento)})
+        for e in eventos
+    ]
 
 
 # --- Recintos -------------------------------------------------------------
@@ -57,26 +64,32 @@ def crear_recinto(datos: RecintoIn, session: Session = Depends(get_session), _: 
 # --- Eventos --------------------------------------------------------------
 @router.get("", response_model=list[EventoResumen])
 def cartelera(session: Session = Depends(get_session)):
-    return [_resumen(e) for e in servicio.listar_publicados(session)]
+    return _resumenes(session, servicio.listar_publicados(session))
+
+
+@router.get("/tipos", response_model=list[TipoEventoOut])
+def tipos(session: Session = Depends(get_session)):
+    """Catalogo de tipos de evento. Publico (GET /api/eventos/*)."""
+    return [TipoEventoOut.model_validate(t, from_attributes=True) for t in servicio.listar_tipos(session)]
 
 
 @router.get("/mios", response_model=list[EventoResumen])
 def mis_eventos(session: Session = Depends(get_session), identidad: Identidad = Depends(gestor)):
-    return [_resumen(e) for e in servicio.listar_propios(session, identidad)]
+    return _resumenes(session, servicio.listar_propios(session, identidad))
 
 
 @router.get("/{evento_id}", response_model=EventoDetalle)
 def detalle(evento_id: int, session: Session = Depends(get_session),
             identidad: Identidad | None = Depends(identidad_opcional)):
     with _errores():
-        return _detalle(servicio.obtener_visible(session, evento_id, identidad))
+        return _detalle(session, servicio.obtener_visible(session, evento_id, identidad))
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=EventoDetalle)
 def crear_evento(datos: EventoIn, session: Session = Depends(get_session), identidad: Identidad = Depends(gestor)):
     with _errores():
         evento = servicio.crear_evento(session, datos, identidad)
-        return _detalle(servicio.obtener_visible(session, evento.id, identidad))
+        return _detalle(session, servicio.obtener_visible(session, evento.id, identidad))
 
 
 @router.patch("/{evento_id}", response_model=EventoDetalle)
@@ -84,7 +97,7 @@ def editar_evento(evento_id: int, datos: EventoPatch, session: Session = Depends
                   identidad: Identidad = Depends(gestor)):
     with _errores():
         servicio.editar_evento(session, evento_id, datos, identidad)
-        return _detalle(servicio.obtener_visible(session, evento_id, identidad))
+        return _detalle(session, servicio.obtener_visible(session, evento_id, identidad))
 
 
 @router.post("/{evento_id}/sectores", status_code=status.HTTP_201_CREATED, response_model=SectorOut)
@@ -115,4 +128,4 @@ def borrar_zona(evento_id: int, zona_id: int, session: Session = Depends(get_ses
 def publicar(evento_id: int, session: Session = Depends(get_session), identidad: Identidad = Depends(gestor),
              ventas: ClienteVentas = Depends(get_cliente_ventas)):
     with _errores():
-        return _detalle(servicio.publicar(session, evento_id, identidad, ventas))
+        return _detalle(session, servicio.publicar(session, evento_id, identidad, ventas))

@@ -2,6 +2,8 @@
 
 import pytest
 
+from tests.helpers import datos_evento
+
 OWNER = {"X-User-Id": "10", "X-User-Role": "event_owner"}
 OTRO_OWNER = {"X-User-Id": "11", "X-User-Role": "event_owner"}
 ADMIN = {"X-User-Id": "1", "X-User-Role": "administrador"}
@@ -15,8 +17,7 @@ def recinto(client):
 
 @pytest.fixture
 def evento(client, recinto):
-    datos = {"nombre": "Recital", "fecha": "2026-12-20T21:00:00Z", "recinto_id": recinto["id"]}
-    return client.post("/eventos", json=datos, headers=OWNER).json()
+    return client.post("/eventos", json=datos_evento(recinto["id"]), headers=OWNER).json()
 
 
 @pytest.fixture
@@ -43,12 +44,12 @@ def test_owner_ajeno_recibe_403_sobre_evento_publicado(client, evento, db_sessio
 
 
 def test_cliente_no_puede_crear_eventos(client, recinto):
-    datos = {"nombre": "X", "fecha": "2026-12-20T21:00:00Z", "recinto_id": recinto["id"]}
+    datos = datos_evento(recinto["id"], nombre="X")
     assert client.post("/eventos", json=datos, headers=CLIENTE).status_code == 403
 
 
 def test_sin_identidad_no_puede_crear(client, recinto):
-    datos = {"nombre": "X", "fecha": "2026-12-20T21:00:00Z", "recinto_id": recinto["id"]}
+    datos = datos_evento(recinto["id"], nombre="X")
     assert client.post("/eventos", json=datos).status_code == 401
 
 
@@ -87,12 +88,12 @@ def test_zona_invalida_responde_422(client, evento, sector, zona):
 
 
 def test_recinto_inexistente_responde_422(client):
-    datos = {"nombre": "X", "fecha": "2026-12-20T21:00:00Z", "recinto_id": 999}
+    datos = datos_evento(999, nombre="X")
     assert client.post("/eventos", json=datos, headers=OWNER).status_code == 422
 
 
 def test_mis_eventos_lista_solo_los_propios(client, evento, recinto):
-    datos = {"nombre": "Ajeno", "fecha": "2026-12-21T21:00:00Z", "recinto_id": recinto["id"]}
+    datos = datos_evento(recinto["id"], nombre="Ajeno")
     client.post("/eventos", json=datos, headers=OTRO_OWNER)
     nombres = [e["nombre"] for e in client.get("/eventos/mios", headers=OWNER).json()]
     assert nombres == ["Recital"]

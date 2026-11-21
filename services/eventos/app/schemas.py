@@ -16,10 +16,29 @@ class RecintoOut(BaseModel):
     direccion: str
 
 
+class TipoEventoOut(BaseModel):
+    codigo: str
+    nombre: str
+
+
+class OrganizadorOut(BaseModel):
+    id: int
+    nombre: str
+
+
+class ParticipanteOut(BaseModel):
+    id: int
+    nombre: str
+
+
 class EventoIn(BaseModel):
     nombre: str = Field(min_length=1, max_length=200)
     fecha: datetime
     recinto_id: int
+    tipo: str = Field(min_length=1, max_length=30)  # codigo del catalogo de tipos
+    organizador: str = Field(max_length=200)  # nombre: se busca o se crea
+    participantes: list[str] = Field(default=[], max_length=50)  # nombres: se buscan o se crean
+    descripcion: str = Field(default="", max_length=5000)
 
 
 class EventoPatch(BaseModel):
@@ -85,10 +104,14 @@ class EventoResumen(BaseModel):
     id: int
     nombre: str
     fecha: datetime
-    estado: str
+    estado: str  # borrador | publicado | cancelado | finalizado (calculado)
     owner_id: int
     recinto: RecintoOut
+    tipo: str
+    organizador: OrganizadorOut | None  # None solo en eventos anteriores a este dato
+    participantes: list[ParticipanteOut] = []
 
 
 class EventoDetalle(EventoResumen):
+    descripcion: str = ""
     sectores: list[SectorOut] = []
