@@ -11,8 +11,8 @@ from app.cliente_ventas import ClienteVentas, VentasNoDisponible, get_cliente_ve
 from app.db import get_session
 from app.identidad import ROL_ADMINISTRADOR, ROL_EVENT_OWNER, Identidad, identidad_opcional, requiere_rol
 from app.schemas import (
-    EventoDetalle, EventoIn, EventoPatch, EventoResumen, RecintoIn, RecintoOut, SectorIn, SectorOut, TipoEventoOut,
-    ZonaIn, ZonaOut,
+    EventoDetalle, EventoIn, EventoPatch, EventoResumen, OperacionPendienteOut, RecintoIn, RecintoOut,
+    ReprogramacionIn, SectorIn, SectorOut, TipoEventoOut, ZonaIn, ZonaOut,
 )
 
 router = APIRouter(prefix="/eventos")
@@ -36,10 +36,16 @@ def _errores():
         raise HTTPException(status_code=503, detail="ventas no disponible: el evento sigue en borrador")
 
 
-def _detalle(session: Session, evento) -> EventoDetalle:
-    """Detalle con el estado calculado (finalizado) segun el reloj de la base."""
-    estado = servicio.estado_de(evento, servicio.ahora(session))
-    return EventoDetalle.model_validate(evento, from_attributes=True).model_copy(update={"estado": estado})
+def _detalle(session: Session, evento, identidad: Identidad | None = None) -> EventoDetalle:
+    """Detalle con el estado calculado (finalizado) segun el reloj de la base y,
+    para el owner y los administradores, las operaciones pendientes con ventas."""
+    cambios = {"estado": servicio.estado_de(evento, servicio.ahora(session))}
+    if servicio.puede_gestionar(evento, identidad):
+        cambios["operaciones_pendientes"] = [
+            OperacionPendienteOut.model_validate(op, from_attributes=True)
+            for op in servicio.operaciones_pendientes(session, evento.id)
+        ]
+    return EventoDetalle.model_validate(evento, from_attributes=True).model_copy(update=cambios)
 
 
 def _resumenes(session: Session, eventos) -> list[EventoResumen]:
@@ -91,14 +97,14 @@ def mis_eventos(session: Session = Depends(get_session), identidad: Identidad = 
 def detalle(evento_id: int, session: Session = Depends(get_session),
             identidad: Identidad | None = Depends(identidad_opcional)):
     with _errores():
-        return _detalle(session, servicio.obtener_visible(session, evento_id, identidad))
+        return _detalle(session, servicio.obtener_visible(session, evento_id, identidad), identidad)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=EventoDetalle)
 def crear_evento(datos: EventoIn, session: Session = Depends(get_session), identidad: Identidad = Depends(gestor)):
     with _errores():
         evento = servicio.crear_evento(session, datos, identidad)
-        return _detalle(session, servicio.obtener_visible(session, evento.id, identidad))
+        return _detalle(session, servicio.obtener_visible(session, evento.id, identidad), identidad)
 
 
 @router.patch("/{evento_id}", response_model=EventoDetalle)
@@ -106,7 +112,15 @@ def editar_evento(evento_id: int, datos: EventoPatch, session: Session = Depends
                   identidad: Identidad = Depends(gestor)):
     with _errores():
         servicio.editar_evento(session, evento_id, datos, identidad)
-        return _detalle(session, servicio.obtener_visible(session, evento_id, identidad))
+        return _detalle(session, servicio.obtener_visible(session, evento_id, identidad), identidad)
+
+
+@router.delete("/{evento_id}", status_code=status.HTTP_204_NO_CONTENT)
+def borrar_evento(evento_id: int, session: Session = Depends(get_session), identidad: Identidad = Depends(gestor)):
+    """Solo borradores (409 si esta publicado, finalizado o cancelado)."""
+    with _errores():
+        servicio.borrar_evento(session, evento_id, identidad)
+    return Response(status_code=204)
 
 
 @router.post("/{evento_id}/sectores", status_code=status.HTTP_201_CREATED, response_model=SectorOut)
@@ -137,4 +151,29 @@ def borrar_zona(evento_id: int, zona_id: int, session: Session = Depends(get_ses
 def publicar(evento_id: int, session: Session = Depends(get_session), identidad: Identidad = Depends(gestor),
              ventas: ClienteVentas = Depends(get_cliente_ventas)):
     with _errores():
-        return _detalle(session, servicio.publicar(session, evento_id, identidad, ventas))
+        return _detalle(session, servicio.publicar(session, evento_id, identidad, ventas), identidad)
+
+
+def _resultado(session: Session, evento_id: int, identidad: Identidad, resultado: servicio.Resultado,
+               response: Response) -> EventoDetalle:
+    """200 si el cambio quedo aplicado; 202 si quedo pendiente de ventas (lo
+    completa eventos-cron). En los dos casos devuelve el detalle actual."""
+    if resultado == servicio.Resultado.PENDIENTE:
+        response.status_code = status.HTTP_202_ACCEPTED
+    return _detalle(session, servicio.obtener_visible(session, evento_id, identidad), identidad)
+
+
+@router.post("/{evento_id}/cancelar", response_model=EventoDetalle)
+def cancelar(evento_id: int, response: Response, session: Session = Depends(get_session),
+             identidad: Identidad = Depends(gestor), ventas: ClienteVentas = Depends(get_cliente_ventas)):
+    with _errores():
+        resultado = servicio.cancelar(session, evento_id, identidad, ventas)
+        return _resultado(session, evento_id, identidad, resultado, response)
+
+
+@router.post("/{evento_id}/reprogramar", response_model=EventoDetalle)
+def reprogramar(evento_id: int, datos: ReprogramacionIn, response: Response, session: Session = Depends(get_session),
+                identidad: Identidad = Depends(gestor), ventas: ClienteVentas = Depends(get_cliente_ventas)):
+    with _errores():
+        resultado = servicio.reprogramar(session, evento_id, identidad, ventas, datos.fecha)
+        return _resultado(session, evento_id, identidad, resultado, response)

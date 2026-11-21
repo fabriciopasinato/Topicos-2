@@ -127,6 +127,21 @@ class EventoResumen(BaseModel):
     participantes: list[ParticipanteOut] = []
 
 
+class OperacionPendienteOut(BaseModel):
+    """Reprogramacion o cancelacion que todavia no confirmo ventas."""
+
+    tipo: str  # reprogramar | cancelar
+    fecha: datetime | None = None  # nueva fecha, solo en reprogramar
+    created_at: datetime
+    intentos: int
+
+
 class EventoDetalle(EventoResumen):
     descripcion: str = ""
     sectores: list[SectorOut] = []
+    # Solo para el owner y los administradores; vacio para el resto.
+    operaciones_pendientes: list[OperacionPendienteOut] = []
+
+
+class ReprogramacionIn(BaseModel):
+    fecha: datetime

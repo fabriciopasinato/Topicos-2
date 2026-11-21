@@ -1,17 +1,19 @@
 """Logica de negocio de eventos. Recibe una Session y no conoce HTTP."""
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, selectinload
 
 from app.cliente_ventas import ClienteVentas, VentasNoDisponible
 from app.identidad import Identidad
 from app.models import (
-    BORRADOR, CANCELADO, FINALIZADO, GENERAL, NUMERADA, PUBLICADO, Asiento, Evento, Organizador, Participante, Recinto, Sector,
-    TipoEvento, Zona,
+    BORRADOR, CANCELADO, FINALIZADO, GENERAL, NUMERADA, PUBLICADO, Asiento, EstadoOperacion, Evento, OperacionVentas,
+    Organizador, Participante, Recinto, Sector, TipoEvento, TipoOperacion, Zona,
 )
 from app.schemas import EventoIn, EventoPatch, ZonaIn
 
@@ -253,6 +255,8 @@ def editar_evento(session: Session, evento_id: int, datos: EventoPatch, identida
     try:
         momento = ahora(session)
         exigir_permitido(evento, Accion.EDITAR, momento)
+        if _hay_cancelacion_pendiente(session, evento_id):
+            raise Conflicto("el evento tiene una cancelacion pendiente")
         if "recinto_id" in cambios and cambios["recinto_id"] != evento.recinto_id:
             exigir_permitido(evento, Accion.CAMBIAR_RECINTO, momento)
             evento.recinto_id = _exigir_recinto(session, cambios["recinto_id"])
@@ -272,6 +276,20 @@ def editar_evento(session: Session, evento_id: int, datos: EventoPatch, identida
         raise
     session.commit()
     return evento
+
+
+def borrar_evento(session: Session, evento_id: int, identidad: Identidad) -> None:
+    """Solo borradores. Se borran sus sectores, zonas, asientos y su relacion
+    con los participantes; organizadores y participantes quedan (pueden estar
+    en otros eventos)."""
+    evento = obtener_gestionable(session, evento_id, identidad, bloquear=True)
+    try:
+        exigir_permitido(evento, Accion.BORRAR, ahora(session))
+    except Conflicto:
+        session.rollback()
+        raise
+    session.delete(evento)
+    session.commit()
 
 
 def _exigir_zonas_modificables(session: Session, evento: Evento) -> None:
@@ -374,3 +392,192 @@ def publicar(session: Session, evento_id: int, identidad: Identidad, ventas: Cli
     evento.publicado_at = func.now()
     session.commit()
     return evento
+
+
+# --- Outbox hacia ventas: que significa cada tipo de operacion -------------------
+
+@dataclass(frozen=True)
+class Efecto:
+    """Lo que significa un tipo de operacion, en los dos servicios. Definirlo
+    en un solo lugar evita que el envio y la aplicacion se desincronicen, y
+    que un tipo nuevo caiga en un caso por defecto equivocado."""
+
+    cambios_para_ventas: Callable[[OperacionVentas], dict]  # kwargs de ClienteVentas.actualizar_evento
+    aplicar_en_eventos: Callable[[Evento, OperacionVentas], None]
+
+
+def _reprogramar_evento(evento: Evento, op: OperacionVentas) -> None:
+    evento.fecha = op.fecha
+
+
+def _cancelar_evento(evento: Evento, op: OperacionVentas) -> None:
+    evento.estado = CANCELADO
+
+
+EFECTOS: dict[TipoOperacion, Efecto] = {
+    TipoOperacion.REPROGRAMAR: Efecto(
+        cambios_para_ventas=lambda op: {"fecha_inicio": op.fecha},
+        aplicar_en_eventos=_reprogramar_evento,
+    ),
+    TipoOperacion.CANCELAR: Efecto(
+        cambios_para_ventas=lambda op: {"cancelado": True},
+        aplicar_en_eventos=_cancelar_evento,
+    ),
+}
+
+
+class Resultado(StrEnum):
+    """Como termino una cancelacion o reprogramacion."""
+
+    APLICADO = "aplicado"    # ya rige en eventos (y en ventas, si estaba publicado) -> 200
+    PENDIENTE = "pendiente"  # guardada; falta que ventas confirme (eventos-cron) -> 202
+
+
+# --- Outbox hacia ventas: aplicar una operacion confirmada ------------------------
+
+def aplicar(session: Session, operacion_id: int) -> None:
+    """Aplica en eventos una operacion que ventas ya confirmo, y la marca
+    confirmada. La usan el envio inmediato y eventos-cron.
+
+    Idempotente y tolerante al desorden: aplica solo si la version es mayor a
+    la ultima aplicada, y nunca sobre un evento cancelado (la cancelacion es
+    final). Una operacion vieja o repetida se marca confirmada sin efecto.
+
+    Orden de locks: primero la operacion y despues el evento, igual que el cron.
+    Con el mismo orden en todos lados, dos confirmaciones simultaneas de la
+    misma operacion se esperan en lugar de bloquearse mutuamente (deadlock).
+    """
+    op = session.scalar(select(OperacionVentas).where(OperacionVentas.id == operacion_id).with_for_update())
+    if op is None or op.estado == EstadoOperacion.CONFIRMADA:
+        session.rollback()
+        return
+    evento = session.scalar(
+        select(Evento).where(Evento.id == op.evento_id).with_for_update().execution_options(populate_existing=True)
+    )
+    if op.version > evento.version_aplicada and evento.estado != CANCELADO:
+        EFECTOS[op.tipo].aplicar_en_eventos(evento, op)
+        evento.version_aplicada = op.version
+    op.estado = EstadoOperacion.CONFIRMADA
+    op.confirmada_at = func.now()
+    session.commit()
+
+
+# --- Outbox hacia ventas: registrar, enviar y reintentar --------------------------
+
+ESPERA_BASE_SEGUNDOS = 5
+ESPERA_MAXIMA_SEGUNDOS = 60
+
+
+def operaciones_pendientes(session: Session, evento_id: int) -> list[OperacionVentas]:
+    return list(session.scalars(
+        select(OperacionVentas)
+        .where(OperacionVentas.evento_id == evento_id, OperacionVentas.estado == EstadoOperacion.PENDIENTE)
+        .order_by(OperacionVentas.id)
+    ))
+
+
+def _hay_cancelacion_pendiente(session: Session, evento_id: int) -> bool:
+    return session.scalar(
+        select(func.count()).select_from(OperacionVentas).where(
+            OperacionVentas.evento_id == evento_id,
+            OperacionVentas.tipo == TipoOperacion.CANCELAR,
+            OperacionVentas.estado == EstadoOperacion.PENDIENTE,
+        )
+    ) > 0
+
+
+def _registrar_operacion(session: Session, evento: Evento, tipo: TipoOperacion,
+                         fecha: datetime | None = None) -> int:
+    """TX1 del outbox: con el evento bloqueado, asigna la proxima version y
+    guarda la intencion. Desde el commit, la operacion ya no se pierde: si el
+    envio falla o el proceso se cae, eventos-cron la reintenta."""
+    evento.version += 1
+    op = OperacionVentas(evento_id=evento.id, tipo=tipo, version=evento.version, fecha=fecha)
+    session.add(op)
+    session.commit()
+    return op.id
+
+
+def registrar_fallo(session: Session, operacion_id: int, error: Exception) -> None:
+    """Posterga el proximo intento con espera exponencial (5, 10, 20, 40, 60, 60... s)."""
+    session.execute(
+        update(OperacionVentas)
+        .where(OperacionVentas.id == operacion_id)
+        .values(
+            intentos=OperacionVentas.intentos + 1,
+            ultimo_error=str(error)[:500],
+            proximo_intento_at=func.now() + func.make_interval(
+                0, 0, 0, 0, 0, 0,
+                func.least(ESPERA_MAXIMA_SEGUNDOS, ESPERA_BASE_SEGUNDOS * func.power(2, OperacionVentas.intentos)),
+            ),
+        )
+    )
+    session.commit()
+
+
+def enviar(session: Session, operacion_id: int, ventas: ClienteVentas) -> Resultado:
+    """Envia la operacion a ventas (sin locks tomados durante el HTTP). Si
+    ventas confirma, la aplica en eventos; si no, registra el fallo."""
+    op = session.get(OperacionVentas, operacion_id)
+    evento_id, version, cambios = op.evento_id, op.version, EFECTOS[op.tipo].cambios_para_ventas(op)
+    session.rollback()  # no retener nada mientras se espera a ventas
+    try:
+        ventas.actualizar_evento(evento_id, version, **cambios)
+    except VentasNoDisponible as error:
+        registrar_fallo(session, operacion_id, error)
+        return Resultado.PENDIENTE
+    aplicar(session, operacion_id)
+    return Resultado.APLICADO
+
+
+def cancelar(session: Session, evento_id: int, identidad: Identidad, ventas: ClienteVentas) -> Resultado:
+    """Cancela un evento.
+
+    Borrador: se cancela al instante (ventas no tiene su inventario).
+    Publicado: outbox; queda `publicado` hasta que ventas confirme.
+    Ya cancelado, o con una cancelacion pendiente: no registra nada nuevo.
+    """
+    evento = obtener_gestionable(session, evento_id, identidad, bloquear=True)
+    if evento.estado == CANCELADO:
+        session.rollback()
+        return Resultado.APLICADO
+    if _hay_cancelacion_pendiente(session, evento_id):
+        session.rollback()
+        return Resultado.PENDIENTE
+    try:
+        exigir_permitido(evento, Accion.CANCELAR, ahora(session))
+    except Conflicto:
+        session.rollback()
+        raise
+    if evento.estado == BORRADOR:
+        evento.estado = CANCELADO
+        session.commit()
+        return Resultado.APLICADO
+    operacion_id = _registrar_operacion(session, evento, TipoOperacion.CANCELAR)
+    return enviar(session, operacion_id, ventas)
+
+
+def reprogramar(session: Session, evento_id: int, identidad: Identidad, ventas: ClienteVentas,
+                fecha: datetime) -> Resultado:
+    """Cambia la fecha de inicio.
+
+    Borrador: se aplica al instante. Publicado: outbox; el evento conserva la
+    fecha anterior hasta que ventas confirme la nueva.
+    """
+    evento = obtener_gestionable(session, evento_id, identidad, bloquear=True)
+    try:
+        momento = ahora(session)
+        exigir_permitido(evento, Accion.REPROGRAMAR, momento)
+        if _hay_cancelacion_pendiente(session, evento_id):
+            raise Conflicto("el evento tiene una cancelacion pendiente")
+        if fecha <= momento:
+            raise Invalido("la nueva fecha tiene que ser futura")
+    except (Conflicto, Invalido):
+        session.rollback()
+        raise
+    if evento.estado == BORRADOR:
+        evento.fecha = fecha
+        session.commit()
+        return Resultado.APLICADO
+    operacion_id = _registrar_operacion(session, evento, TipoOperacion.REPROGRAMAR, fecha)
+    return enviar(session, operacion_id, ventas)

@@ -20,3 +20,48 @@ def datos_evento(recinto_id: int, **cambios) -> dict:
         "organizador": "DF Entertainment",
         **cambios,
     }
+
+
+class VentasFalsa:
+    """Reemplaza al cliente HTTP de ventas aplicando sus mismas reglas: solo
+    versiones mayores a la ultima, y la cancelacion es irreversible. Asi los
+    tests pueden verificar el estado final en los dos servicios.
+    `caida = True` simula ventas sin responder."""
+
+    def __init__(self):
+        import threading
+
+        self.caida = False
+        self.inventarios: list[dict] = []
+        self.eventos: dict[int, dict] = {}  # evento_id -> {version, fecha_inicio, cancelado}
+        self.recibidos: list[dict] = []
+        self._lock = threading.Lock()
+
+    def _no_responde(self):
+        from app.cliente_ventas import VentasNoDisponible
+
+        if self.caida:
+            raise VentasNoDisponible("timeout")
+
+    def enviar_inventario(self, inventario: dict) -> None:
+        self._no_responde()
+        with self._lock:
+            self.inventarios.append(inventario)
+            self.eventos.setdefault(inventario["evento_id"], {
+                "version": 0, "fecha_inicio": inventario.get("fecha_inicio"), "cancelado": False,
+            })
+
+    def actualizar_evento(self, evento_id, version, fecha_inicio=None, cancelado=False) -> None:
+        self._no_responde()
+        if fecha_inicio is not None:
+            fecha_inicio = fecha_inicio.isoformat()  # como viaja por la red (JSON)
+        with self._lock:
+            self.recibidos.append({"evento_id": evento_id, "version": version,
+                                   "fecha_inicio": fecha_inicio, "cancelado": cancelado})
+            estado = self.eventos.setdefault(evento_id, {"version": 0, "fecha_inicio": None, "cancelado": False})
+            if version > estado["version"]:
+                estado["version"] = version
+                if cancelado:
+                    estado["cancelado"] = True
+                elif fecha_inicio is not None and not estado["cancelado"]:
+                    estado["fecha_inicio"] = fecha_inicio
