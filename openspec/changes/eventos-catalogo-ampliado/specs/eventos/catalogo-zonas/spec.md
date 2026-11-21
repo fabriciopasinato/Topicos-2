@@ -54,6 +54,11 @@ Cualquier usuario, autenticado o no, SHALL poder listar los eventos publicados q
 - **WHEN** un visitante sin token consulta la cartelera
 - **THEN** recibe solo los eventos publicados cuya fecha de inicio es futura, ordenados por fecha
 
+#### Scenario: Eventos cancelados y finalizados fuera del listado
+- **GIVEN** un evento publicado a futuro, uno cancelado y uno finalizado
+- **WHEN** un visitante consulta la cartelera
+- **THEN** recibe solo el evento publicado a futuro
+
 #### Scenario: Borrador ajeno
 - **WHEN** un cliente pide el detalle de un evento en borrador
 - **THEN** se responde 404
