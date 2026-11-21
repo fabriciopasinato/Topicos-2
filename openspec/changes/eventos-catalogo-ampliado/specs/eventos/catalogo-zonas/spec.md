@@ -79,15 +79,24 @@ Cualquier usuario, autenticado o no, SHALL poder listar los eventos publicados q
 
 ## ADDED Requirements
 
-### Requirement: Tipo de evento de una lista fija
-El tipo de un evento SHALL ser uno de: `recital`, `teatro`, `deporte`, `conferencia`, `festival` u `otro`.
+### Requirement: Tipos de evento definidos en un catálogo
+El tipo de un evento SHALL ser uno de los tipos registrados en el catálogo de tipos del servicio, cada uno con un código y un nombre visible. El catálogo SHALL incluir inicialmente `recital`, `teatro`, `deporte`, `conferencia`, `festival` y `otro`. Cualquier usuario, autenticado o no, SHALL poder consultar el catálogo.
 
 #### Scenario: Tipo válido
 - **WHEN** el owner crea un evento de tipo `teatro`
 - **THEN** el evento se crea con ese tipo
 
+#### Scenario: Listado de tipos
+- **WHEN** un visitante sin token consulta los tipos de evento
+- **THEN** recibe cada tipo del catálogo con su código y su nombre visible
+
+#### Scenario: Tipo agregado al catálogo
+- **GIVEN** que se agregó al catálogo el tipo `stand-up`
+- **WHEN** el owner crea un evento de tipo `stand-up`
+- **THEN** el evento se crea con ese tipo
+
 #### Scenario: Tipo inexistente
-- **WHEN** el owner crea o edita un evento con tipo `stand-up`
+- **WHEN** el owner crea o edita un evento con un tipo que no está en el catálogo
 - **THEN** se responde 422 y el evento no se crea ni cambia
 
 ### Requirement: Organizadores y participantes sin duplicados

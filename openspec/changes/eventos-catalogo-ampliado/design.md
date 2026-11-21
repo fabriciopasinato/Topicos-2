@@ -44,9 +44,14 @@ Una sola función `buscar_o_crear(session, Modelo, nombre)` resuelve las dos ent
 - *Alternativa descartada: una sola tabla `entidades` con columna `tipo`.* La base no podría impedir que `organizador_id` apunte a un participante, y los atributos propios de cada uno (CUIT, disciplina) terminarían como columnas vacías en la mitad de las filas.
 - *Alternativa descartada: texto libre en el evento.* Si más adelante hacen falta más datos, habría que deduplicar todos los nombres ya cargados.
 
-### 3. Tipo como enum de código con check en la base
+### 3. Tipos de evento en una tabla, con el código como clave
 
-Un `enum.StrEnum` en `app/models.py` con los seis valores, validado por Pydantic en la API y por un `CheckConstraint` en la tabla, con el mismo patrón que `estado`. Pasarlo a una tabla más adelante es una migración.
+Una tabla `tipos_evento (codigo PK, nombre)` que la migración crea con los seis tipos iniciales. `eventos.tipo` es una FK a `tipos_evento.codigo`. Agregar un tipo es insertar una fila por migración, sin tocar el código. La API valida que el tipo exista antes de escribir (422 si no existe), y la FK lo garantiza en la base. `GET /eventos/tipos` (público) devuelve el catálogo para el formulario del owner y los filtros de la cartelera.
+
+Usar el código como clave (en lugar de un id numérico) mantiene la API igual (`"tipo": "recital"`), y permite filtrar la cartelera con `?tipo=recital` sin un join.
+
+- *Alternativa descartada: `enum.StrEnum` en el código con un `CheckConstraint`.* Agregar un tipo exigiría cambiar el código y el check, y el frontend no podría leer la lista desde la API.
+- *Alternativa descartada: gestión de tipos por un administrador desde la app.* Suma endpoints, permisos y reglas de baja. Queda para un change futuro: la tabla ya lo permite sin rehacer nada.
 
 ### 4. Estado guardado y estado calculado
 
@@ -71,7 +76,7 @@ Hay una tabla nueva `operaciones_ventas`:
 | `intentos`, `ultimo_error`, `proximo_intento_at` | Reintentos con espera creciente |
 | `created_at`, `confirmada_at` | Auditoría |
 
-Hay un índice parcial sobre `(proximo_intento_at) WHERE estado = 'pendiente'` para que el cron encuentre rápido lo pendiente.
+Hay un índice parcial sobre `(proximo_intento_at) WHERE estado = 'pendiente'` para que el cron encuentre rápido lo pendiente, y una restricción única sobre `(evento_id, version)`: es la garantía en la base de que dos operaciones de un mismo evento nunca comparten versión, aunque un bug en la asignación lo intentara. También hay checks sobre `tipo`, `estado`, y que `reprogramar` tenga `fecha`.
 
 En `eventos` se agregan dos contadores:
 - `version`: la última versión **asignada**.
@@ -133,6 +138,7 @@ Es un módulo `app/cron.py` con un bucle simple: cada `CRON_INTERVALO_SEGUNDOS` 
 | Método y ruta | Cambio |
 |---|---|
 | `POST /eventos` | Suma `tipo`, `organizador`, `participantes[]` y `descripcion`. |
+| `GET /eventos/tipos` | Catálogo de tipos `[{codigo, nombre}]`, público. Se registra antes de `GET /eventos/{id}`. |
 | `PATCH /eventos/{id}` | Edita los datos descriptivos, y el `recinto_id` solo en borrador. Si llega `fecha`, responde 422 con un mensaje que indica usar la reprogramación. |
 | `POST /eventos/{id}/reprogramar` | `{fecha}`. Responde 200 si se aplicó, o 202 con el evento y la operación pendiente. |
 | `POST /eventos/{id}/cancelar` | Responde 200 si se aplicó, o 202 si quedó pendiente. Si ya está cancelado, 200 sin hacer nada. |
@@ -159,7 +165,7 @@ Son rutas bajo `/owner`, visibles para `event_owner` y `administrador`: "Mis eve
 
 ## Migration Plan
 
-1. **eventos `0002`**: crea `organizadores`, `participantes`, `evento_participantes` y `operaciones_ventas`; agrega a `eventos` las columnas `tipo` (default `'otro'`), `descripcion` (default `''`), `organizador_id` (nullable), `version`, `version_aplicada` (default 0) y `publicado_at` (se completa con `created_at` para los eventos ya publicados); amplía el check de `estado` con `cancelado`. Con su `downgrade`.
+1. **eventos `0002`**: crea `tipos_evento` con los seis tipos iniciales, `organizadores`, `participantes`, `evento_participantes` y `operaciones_ventas`; agrega a `eventos` las columnas `tipo` (FK a `tipos_evento`; el default `'otro'` solo completa los eventos existentes y después se quita), `descripcion` (default `''`), `organizador_id` (nullable), `version`, `version_aplicada` (default 0) y `publicado_at` (se completa con `created_at` para los eventos ya publicados); amplía el check de `estado` con `cancelado`. Con su `downgrade`.
 2. **ventas `0002`**: agrega las columnas a `inventario_eventos`, con su `downgrade`.
 3. **Orden de despliegue**: primero ventas (acepta `fecha_inicio` opcional y el endpoint nuevo), después eventos y `eventos-cron`. Con `docker compose up -d --build` las migraciones se aplican solas al arrancar cada servicio.
 4. **Rollback**: `alembic downgrade -1` en cada servicio y volver a la imagen anterior. Las operaciones pendientes del outbox se pierden con el downgrade, y es aceptable en desarrollo.
