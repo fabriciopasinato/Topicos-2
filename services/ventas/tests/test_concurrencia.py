@@ -188,3 +188,58 @@ def test_reservas_concurrentes_con_la_cancelacion_nunca_venden(engine_paralelo):
         assert c.scalar(text("SELECT count(*) FROM tickets WHERE estado = 'vendido'")) == 0
         assert c.scalar(text("SELECT count(*) FROM ordenes")) == 0
         assert c.scalar(text("SELECT cancelado FROM inventario_eventos WHERE evento_id = :e"), {"e": EVENTO})
+
+
+def test_dos_solicitudes_devolucion_simultaneas_crean_una_sola(engine_paralelo):
+    a5 = _ticket(engine_paralelo, "A", 5)
+    with Session(engine_paralelo) as s:
+        reserva_id = servicio.reservar(s, 20, "k-dev-dup", _pedido([a5]), TTL, MAXIMO).id
+        servicio.pagar(s, reserva_id, 20)
+        item_id = servicio.compras_de(s, 20)[0]["tickets"][0]["orden_item_id"]
+
+    resultados = _en_paralelo(engine_paralelo, [
+        lambda s: servicio.solicitar_devolucion(s, 20, item_id, "m1")["id"],
+        lambda s: servicio.solicitar_devolucion(s, 20, item_id, "m2")["id"],
+    ])
+    assert sorted(r[0] for r in resultados) == ["DevolucionYaExiste", "ok"]
+    with engine_paralelo.connect() as c:
+        assert c.scalar(text("SELECT count(*) FROM devoluciones WHERE orden_item_id = :i"), {"i": item_id}) == 1
+
+
+def test_dos_admins_resuelven_misma_devolucion_simultaneamente(engine_paralelo):
+    a6 = _ticket(engine_paralelo, "A", 6)
+    with Session(engine_paralelo) as s:
+        reserva_id = servicio.reservar(s, 20, "k-dev-res", _pedido([a6]), TTL, MAXIMO).id
+        servicio.pagar(s, reserva_id, 20)
+        item_id = servicio.compras_de(s, 20)[0]["tickets"][0]["orden_item_id"]
+        dev_id = servicio.solicitar_devolucion(s, 20, item_id, "no voy")["id"]
+
+    resultados = _en_paralelo(engine_paralelo, [
+        lambda s: servicio.aprobar_devolucion(s, dev_id, 1, "aprobada")["estado"],
+        lambda s: servicio.rechazar_devolucion(s, dev_id, 2, "rechazada")["estado"],
+    ])
+    assert sorted(r[0] for r in resultados) == ["DevolucionYaResuelta", "ok"]
+    ganador = next(r[1] for r in resultados if r[0] == "ok")
+    with engine_paralelo.connect() as c:
+        estado_dev = c.scalar(text("SELECT estado FROM devoluciones WHERE id = :d"), {"d": dev_id})
+        estado_ticket = c.scalar(text("SELECT estado FROM tickets WHERE id = :t"), {"t": a6})
+    assert estado_dev == ganador
+    assert estado_ticket == ("disponible" if ganador == "aprobada" else "vendido")
+
+
+def test_dos_admins_aprueban_misma_devolucion_simultaneamente(engine_paralelo):
+    a7 = _ticket(engine_paralelo, "A", 7)
+    with Session(engine_paralelo) as s:
+        reserva_id = servicio.reservar(s, 20, "k-dev-apr", _pedido([a7]), TTL, MAXIMO).id
+        servicio.pagar(s, reserva_id, 20)
+        item_id = servicio.compras_de(s, 20)[0]["tickets"][0]["orden_item_id"]
+        dev_id = servicio.solicitar_devolucion(s, 20, item_id)["id"]
+
+    resultados = _en_paralelo(engine_paralelo, [
+        lambda s: servicio.aprobar_devolucion(s, dev_id, 1)["estado"],
+        lambda s: servicio.aprobar_devolucion(s, dev_id, 2)["estado"],
+    ])
+    assert sorted(r[0] for r in resultados) == ["DevolucionYaResuelta", "ok"]
+    with engine_paralelo.connect() as c:
+        assert c.scalar(text("SELECT estado FROM devoluciones WHERE id = :d"), {"d": dev_id}) == "aprobada"
+        assert c.scalar(text("SELECT estado FROM tickets WHERE id = :t"), {"t": a7}) == "disponible"

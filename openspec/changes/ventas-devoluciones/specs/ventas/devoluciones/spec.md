@@ -2,15 +2,15 @@
 
 ## Purpose
 
-Permitir que los clientes soliciten la devolución de tickets individuales ya comprados y que los administradores revisen, aprueben o rechacen esas solicitudes, liberando el asiento específico o el cupo de zona general al aprobarse y garantizando consistencia bajo concurrencia.
+Permitir que los clientes soliciten la devolución de tickets individuales ya comprados y que los administradores revisen, aprueben o rechacen esas solicitudes, respetando el ciclo de vida del evento (cancelado vs. finalizado), liberando el asiento específico o el cupo de zona general al aprobarse y garantizando consistencia bajo concurrencia.
 
 ## ADDED Requirements
 
 ### Requirement: Solicitud de devolución de un ticket comprado
-Un usuario autenticado con rol `cliente` SHALL poder solicitar la devolución de un ticket individual perteneciente a una orden pagada propia, indicando opcionalmente un motivo. La solicitud SHALL crearse en estado `pendiente` y SHALL NOT liberar el ticket hasta que un administrador la apruebe.
+Un usuario autenticado con rol `cliente` SHALL poder solicitar la devolución de un ticket individual perteneciente a una orden pagada propia, indicando opcionalmente un motivo. La solicitud SHALL crearse en estado `pendiente` y SHALL NOT liberar el ticket hasta que un administrador la apruebe. Si el evento ya inició y no está cancelado, la solicitud SHALL rechazarse con 409; si el evento está cancelado o no tiene fecha de inicio registrada, SHALL permitirse.
 
 #### Scenario: Solicitud exitosa de ticket numerado
-- **GIVEN** que un cliente compró el asiento A-1 en una orden pagada
+- **GIVEN** que un cliente compró el asiento A-1 en una orden pagada para un evento a futuro
 - **WHEN** el cliente solicita la devolución de ese ticket indicando un motivo
 - **THEN** se crea la solicitud con 201 en estado `pendiente` y el asiento A-1 sigue figurando como no disponible
 
@@ -18,6 +18,21 @@ Un usuario autenticado con rol `cliente` SHALL poder solicitar la devolución de
 - **GIVEN** que un cliente compró 2 entradas en una zona general y una de ellas tiene `orden_item_id` X
 - **WHEN** el cliente solicita la devolución de ese ítem
 - **THEN** se crea la solicitud con 201 en estado `pendiente` y el cupo disponible de la zona no cambia todavía
+
+#### Scenario: Solicitud sobre evento ya iniciado no cancelado
+- **GIVEN** que un cliente compró un ticket para un evento cuya `fecha_inicio` ya pasó y no fue cancelado
+- **WHEN** el cliente intenta solicitar la devolución de ese ítem
+- **THEN** se responde 409 y no se crea ninguna solicitud
+
+#### Scenario: Solicitud sobre evento cancelado
+- **GIVEN** que un cliente compró un ticket para un evento marcado como `cancelado` en ventas (aun si su fecha original ya pasó)
+- **WHEN** el cliente solicita la devolución de ese ítem
+- **THEN** se crea la solicitud con 201 en estado `pendiente`
+
+#### Scenario: Solicitud sobre evento sin fecha de inicio registrada
+- **GIVEN** que el inventario del evento no tiene `fecha_inicio` registrada y no está cancelado
+- **WHEN** el cliente solicita la devolución de un ítem comprado de ese evento
+- **THEN** se crea la solicitud con 201 en estado `pendiente`
 
 #### Scenario: Solicitud sobre compra ajena
 - **WHEN** un cliente intenta solicitar la devolución de un ticket comprado por otro usuario
@@ -46,17 +61,17 @@ Un usuario autenticado con rol `cliente` SHALL poder solicitar la devolución de
 - **THEN** se responde 403
 
 ### Requirement: Consulta de solicitudes de devolución
-Un `cliente` SHALL poder consultar únicamente sus propias solicitudes de devolución. Un `administrador` SHALL poder listar todas las solicitudes de devolución, con filtro opcional por estado (`pendiente`, `aprobada`, `rechazada`).
+Un `cliente` SHALL poder consultar únicamente sus propias solicitudes de devolución. Un `administrador` SHALL poder listar todas las solicitudes de devolución, con filtro opcional por estado (`pendiente`, `aprobada`, `rechazada`). Cada solicitud SHALL incluir los datos del ticket y el estado local del evento (`evento_fecha_inicio`, `evento_cancelado`).
 
 #### Scenario: Cliente lista sus devoluciones
 - **GIVEN** que existen solicitudes del cliente A y del cliente B
 - **WHEN** el cliente A consulta el listado de devoluciones
-- **THEN** recibe únicamente las solicitudes del cliente A con los datos del ticket (modalidad, zona, asiento si es numerada, precio y estado)
+- **THEN** recibe únicamente las solicitudes del cliente A con los datos del ticket (modalidad, zona, asiento si es numerada, precio, estado) y `evento_fecha_inicio` y `evento_cancelado`
 
 #### Scenario: Administrador filtra solicitudes pendientes
-- **GIVEN** que existen solicitudes en estado `pendiente`, `aprobada` y `rechazada`
+- **GIVEN** que existen solicitudes en estado `pendiente`, `aprobada` y `rechazada`, incluyendo una de un evento cancelado
 - **WHEN** un administrador consulta el listado con filtro `estado=pendiente`
-- **THEN** recibe únicamente las solicitudes pendientes de todos los clientes
+- **THEN** recibe únicamente las solicitudes pendientes de todos los clientes informando `evento_cancelado` y `evento_fecha_inicio`
 
 #### Scenario: Event owner intenta consultar devoluciones
 - **WHEN** un usuario con rol `event_owner` consulta el listado de devoluciones
@@ -74,6 +89,16 @@ Solo un usuario autenticado con rol `administrador` SHALL poder aprobar una soli
 - **GIVEN** una zona general con 0 disponibles y una solicitud pendiente de devolución de 1 entrada de esa zona
 - **WHEN** un administrador aprueba la solicitud
 - **THEN** la solicitud pasa a `aprobada`, la zona pasa a tener 1 entrada disponible y otro cliente puede reservarla y comprarla
+
+#### Scenario: Aprobación sobre evento cancelado
+- **GIVEN** una solicitud pendiente de un ticket perteneciente a un evento marcado como `cancelado`
+- **WHEN** un administrador aprueba la solicitud
+- **THEN** la solicitud pasa a `aprobada` y el evento continúa rechazando nuevas reservas con 409
+
+#### Scenario: Aprobación de solicitud presentada antes del inicio del evento
+- **GIVEN** una solicitud creada en término antes de la `fecha_inicio` del evento, cuando el evento ya comenzó
+- **WHEN** un administrador aprueba la solicitud
+- **THEN** la solicitud pasa a `aprobada` sin error
 
 #### Scenario: Reventa y nueva devolución de un ticket liberado
 - **GIVEN** que el asiento A-1 fue devuelto por el cliente A (aprobada) y luego comprado por el cliente B en una nueva orden

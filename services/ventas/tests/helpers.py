@@ -9,6 +9,7 @@ ZONA_GENERAL = 20
 CLIENTE = {"X-User-Id": "20", "X-User-Role": "cliente"}
 OTRO_CLIENTE = {"X-User-Id": "21", "X-User-Role": "cliente"}
 OWNER = {"X-User-Id": "10", "X-User-Role": "event_owner"}
+ADMIN = {"X-User-Id": "1", "X-User-Role": "administrador"}
 
 
 def inventario(evento_id: int = EVENTO, filas=("A", "B", "C"), por_fila: int = 10, capacidad_general: int = 10) -> dict:

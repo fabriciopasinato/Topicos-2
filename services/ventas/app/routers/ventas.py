@@ -12,6 +12,8 @@ from app.identidad import Identidad, requiere_rol
 
 router = APIRouter()
 cliente = requiere_rol("cliente")
+admin = requiere_rol("administrador")
+cliente_o_admin = requiere_rol("cliente", "administrador")
 
 
 # --- Esquemas -------------------------------------------------------------------
@@ -77,6 +79,37 @@ class OrdenOut(BaseModel):
     total: float
 
 
+class DevolucionIn(BaseModel):
+    orden_item_id: int = Field(gt=0)
+    motivo: str | None = Field(default=None, max_length=500)
+
+
+class ResolucionDevolucionIn(BaseModel):
+    nota: str | None = Field(default=None, max_length=500)
+
+
+class DevolucionOut(BaseModel):
+    id: int
+    orden_item_id: int
+    orden_id: int
+    ticket_id: int
+    user_id: int
+    evento_id: int
+    zona_id: int
+    tipo_zona: str
+    fila: str | None
+    numero: int | None
+    precio: float
+    estado: str
+    motivo: str | None
+    nota_resolucion: str | None
+    resuelto_por: int | None
+    resuelto_at: datetime | None
+    created_at: datetime
+    evento_fecha_inicio: datetime | None
+    evento_cancelado: bool
+
+
 @contextmanager
 def _errores():
     try:
@@ -95,6 +128,12 @@ def _errores():
         raise HTTPException(status_code=409, detail="la reserva ya fue pagada")
     except servicio.EventoNoALaVenta:
         raise HTTPException(status_code=409, detail="el evento fue cancelado o ya comenzo")
+    except servicio.DevolucionYaExiste:
+        raise HTTPException(status_code=409, detail="el ticket ya tiene una devolucion pendiente o aprobada")
+    except servicio.DevolucionYaResuelta:
+        raise HTTPException(status_code=409, detail="la devolucion ya fue resuelta")
+    except servicio.EventoFinalizado:
+        raise HTTPException(status_code=409, detail="el evento ya comenzo")
 
 
 def _reserva_out(session: Session, reserva) -> ReservaOut:
@@ -132,7 +171,7 @@ def actualizar_evento(evento_id: int, datos: ActualizacionEventoIn, session: Ses
 @router.get("/ventas/eventos/{evento_id}/disponibilidad")
 def disponibilidad(evento_id: int, session: Session = Depends(get_session)):
     with _errores():
-        return {"evento_id": evento_id, "zonas": servicio.disponibilidad(session, evento_id)}
+        return servicio.disponibilidad(session, evento_id)
 
 
 @router.post("/ventas/reservas", status_code=status.HTTP_201_CREATED, response_model=ReservaOut)
@@ -181,3 +220,47 @@ def cancelar(reserva_id: int, session: Session = Depends(get_session), identidad
 @router.get("/ventas/compras")
 def compras(session: Session = Depends(get_session), identidad: Identidad = Depends(cliente)):
     return servicio.compras_de(session, identidad.user_id)
+
+
+@router.post("/ventas/devoluciones", status_code=status.HTTP_201_CREATED, response_model=DevolucionOut)
+def solicitar_devolucion(
+    datos: DevolucionIn,
+    session: Session = Depends(get_session),
+    identidad: Identidad = Depends(cliente),
+):
+    with _errores():
+        return servicio.solicitar_devolucion(session, identidad.user_id, datos.orden_item_id, datos.motivo)
+
+
+@router.get("/ventas/devoluciones", response_model=list[DevolucionOut])
+def listar_devoluciones(
+    estado: str | None = None,
+    session: Session = Depends(get_session),
+    identidad: Identidad = Depends(cliente_o_admin),
+):
+    with _errores():
+        return servicio.listar_devoluciones(session, identidad.user_id, identidad.rol, estado)
+
+
+@router.post("/ventas/devoluciones/{devolucion_id}/aprobar", response_model=DevolucionOut)
+def aprobar_devolucion(
+    devolucion_id: int,
+    datos: ResolucionDevolucionIn | None = None,
+    session: Session = Depends(get_session),
+    identidad: Identidad = Depends(admin),
+):
+    with _errores():
+        nota = datos.nota if datos is not None else None
+        return servicio.aprobar_devolucion(session, devolucion_id, identidad.user_id, nota)
+
+
+@router.post("/ventas/devoluciones/{devolucion_id}/rechazar", response_model=DevolucionOut)
+def rechazar_devolucion(
+    devolucion_id: int,
+    datos: ResolucionDevolucionIn | None = None,
+    session: Session = Depends(get_session),
+    identidad: Identidad = Depends(admin),
+):
+    with _errores():
+        nota = datos.nota if datos is not None else None
+        return servicio.rechazar_devolucion(session, devolucion_id, identidad.user_id, nota)
