@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { describe, expect, test } from "vitest";
 import { API, server } from "../test/server.js";
@@ -138,5 +138,70 @@ describe("reserva", () => {
     await user.click(screen.getByRole("button", { name: "Reservar (1)" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Ingresá para reservar.");
     expect(within(screen.getByRole("main")).getByRole("heading", { name: "Ingresar" })).toBeInTheDocument();
+  });
+});
+
+describe("6.5 filtros de la cartelera y clasificacion", () => {
+  function cartelera(eventos = [EVENTO]) {
+    const consultas = [];
+    server.use(
+      http.get(`${API}/api/eventos`, ({ request }) => {
+        consultas.push(new URL(request.url).searchParams);
+        return HttpResponse.json(eventos);
+      }),
+    );
+    return consultas;
+  }
+
+  test("la tarjeta muestra tipo, organizador y participantes", async () => {
+    cartelera();
+    renderEn("/");
+    expect(await screen.findByText("Recital · DF Entertainment · Los Piojos")).toBeInTheDocument();
+  });
+
+  test("filtra por tipo", async () => {
+    const consultas = cartelera();
+    const { user } = renderEn("/");
+    await screen.findByRole("link", { name: "Recital de prueba" });
+    await user.selectOptions(screen.getByLabelText("Tipo"), "teatro");
+    await waitFor(() => expect(consultas.at(-1).get("tipo")).toBe("teatro"));
+  });
+
+  test("filtra por rango de fechas (inicio y fin del dia)", async () => {
+    const consultas = cartelera();
+    renderEn("/");
+    await screen.findByRole("link", { name: "Recital de prueba" });
+    fireEvent.change(screen.getByLabelText("Desde"), { target: { value: "2030-12-01" } });
+    fireEvent.change(screen.getByLabelText("Hasta"), { target: { value: "2030-12-31" } });
+    await waitFor(() => {
+      const ultima = consultas.at(-1);
+      expect(ultima.get("desde")).toBe(new Date("2030-12-01T00:00:00").toISOString());
+      expect(ultima.get("hasta")).toBe(new Date("2030-12-31T23:59:59").toISOString());
+    });
+  });
+
+  test("un filtro rechazado (422) se informa", async () => {
+    server.use(http.get(`${API}/api/eventos`, () => HttpResponse.json({ detail: [] }, { status: 422 })));
+    renderEn("/");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Revisá los filtros");
+  });
+
+  test("el detalle muestra la clasificacion y la descripcion", async () => {
+    eventoYDisponibilidad();
+    server.use(http.get(`${API}/api/eventos/1`, () => HttpResponse.json({ ...EVENTO, descripcion: "Vuelta a los escenarios" })));
+    renderEn("/eventos/1");
+    expect(await screen.findByText("Recital · DF Entertainment · Los Piojos")).toBeInTheDocument();
+    expect(screen.getByText("Vuelta a los escenarios")).toBeInTheDocument();
+  });
+
+  test.each([
+    ["cancelado", "Este evento fue cancelado."],
+    ["finalizado", "Este evento ya comenzó: la venta está cerrada."],
+  ])("un evento %s avisa y no ofrece reservar", async (estado, aviso) => {
+    eventoYDisponibilidad();
+    server.use(http.get(`${API}/api/eventos/1`, () => HttpResponse.json({ ...EVENTO, estado })));
+    renderEn("/eventos/1");
+    expect(await screen.findByText(aviso)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Reservar/ })).not.toBeInTheDocument();
   });
 });

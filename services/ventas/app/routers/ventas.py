@@ -2,7 +2,7 @@ from contextlib import contextmanager
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app import servicio
@@ -27,6 +27,19 @@ class ZonaInventario(BaseModel):
 class InventarioIn(BaseModel):
     evento_id: int
     zonas: list[ZonaInventario]
+    fecha_inicio: datetime | None = None
+
+
+class ActualizacionEventoIn(BaseModel):
+    version: int = Field(gt=0)
+    fecha_inicio: datetime | None = None
+    cancelado: bool = False
+
+    @model_validator(mode="after")
+    def _algun_cambio(self):
+        if self.fecha_inicio is None and not self.cancelado:
+            raise ValueError("indicar fecha_inicio o cancelado")
+        return self
 
 
 class GeneralIn(BaseModel):
@@ -80,6 +93,8 @@ def _errores():
         raise HTTPException(status_code=409, detail="la reserva vencio o fue cancelada")
     except servicio.ReservaPagada:
         raise HTTPException(status_code=409, detail="la reserva ya fue pagada")
+    except servicio.EventoNoALaVenta:
+        raise HTTPException(status_code=409, detail="el evento fue cancelado o ya comenzo")
 
 
 def _reserva_out(session: Session, reserva) -> ReservaOut:
@@ -100,6 +115,16 @@ def _reserva_out(session: Session, reserva) -> ReservaOut:
 def recibir_inventario(datos: InventarioIn, session: Session = Depends(get_session)):
     creado = servicio.recibir_inventario(session, datos.model_dump())
     return {"evento_id": datos.evento_id, "creado": creado}
+
+
+@router.put("/internal/eventos/{evento_id}")
+def actualizar_evento(evento_id: int, datos: ActualizacionEventoIn, session: Session = Depends(get_session)):
+    """200 tambien si lo ignora por version: ventas ya esta al dia."""
+    with _errores():
+        aplicado = servicio.actualizar_evento(
+            session, evento_id, datos.version, datos.fecha_inicio, datos.cancelado,
+        )
+    return {"evento_id": evento_id, "version": datos.version, "aplicado": aplicado}
 
 
 # --- Publico (via gateway) ------------------------------------------------------

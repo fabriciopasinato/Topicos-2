@@ -210,3 +210,19 @@ button.enlace {
   background: var(--borde);
   opacity: 0.6;
 }
+
+.estado {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--borde);
+  border-radius: 999px;
+  font-size: 0.85em;
+}
+
+.filtros {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 16px;
+}

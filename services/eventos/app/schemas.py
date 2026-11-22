@@ -16,15 +16,47 @@ class RecintoOut(BaseModel):
     direccion: str
 
 
+class TipoEventoOut(BaseModel):
+    codigo: str
+    nombre: str
+
+
+class OrganizadorOut(BaseModel):
+    id: int
+    nombre: str
+
+
+class ParticipanteOut(BaseModel):
+    id: int
+    nombre: str
+
+
 class EventoIn(BaseModel):
     nombre: str = Field(min_length=1, max_length=200)
     fecha: datetime
     recinto_id: int
+    tipo: str = Field(min_length=1, max_length=30)
+    organizador: str = Field(max_length=200)
+    participantes: list[str] = Field(default=[], max_length=50)
+    descripcion: str = Field(default="", max_length=5000)
 
 
 class EventoPatch(BaseModel):
+    """La fecha no se edita aca: se reprograma, porque hay que avisar a ventas."""
+
     nombre: str | None = Field(default=None, min_length=1, max_length=200)
-    fecha: datetime | None = None
+    descripcion: str | None = Field(default=None, max_length=5000)
+    tipo: str | None = Field(default=None, min_length=1, max_length=30)
+    organizador: str | None = Field(default=None, max_length=200)
+    participantes: list[str] | None = Field(default=None, max_length=50)
+    recinto_id: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sin_fecha(cls, datos):
+        if isinstance(datos, dict) and "fecha" in datos:
+            raise ValueError("la fecha no se edita: se cambia con POST /eventos/{id}/reprogramar")
+        return datos
 
 
 class SectorIn(BaseModel):
@@ -88,7 +120,27 @@ class EventoResumen(BaseModel):
     estado: str
     owner_id: int
     recinto: RecintoOut
+    tipo: str
+    organizador: OrganizadorOut | None
+    participantes: list[ParticipanteOut] = []
+
+
+class OperacionPendienteOut(BaseModel):
+    tipo: str
+    fecha: datetime | None = None
+    created_at: datetime
+    intentos: int
+
+
+class EventoPropio(EventoResumen):
+    operaciones_pendientes: list[OperacionPendienteOut] = []
 
 
 class EventoDetalle(EventoResumen):
+    descripcion: str = ""
     sectores: list[SectorOut] = []
+    operaciones_pendientes: list[OperacionPendienteOut] = []
+
+
+class ReprogramacionIn(BaseModel):
+    fecha: datetime
