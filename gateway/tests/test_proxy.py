@@ -27,6 +27,9 @@ def test_rutas_internas_no_son_alcanzables(client, servicios):
     assert client.post("/internal/inventario", json={}).status_code == 404
     assert client.post("/api/internal/inventario", json={},
                        headers={"Authorization": f"Bearer {token()}"}).status_code == 404
+    assert client.put("/internal/eventos/1", json={}).status_code == 404
+    assert client.put("/api/internal/eventos/1", json={},
+                      headers={"Authorization": f"Bearer {token()}"}).status_code == 404
     assert servicios.llamadas == []
 
 

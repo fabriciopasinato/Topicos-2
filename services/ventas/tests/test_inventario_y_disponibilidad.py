@@ -28,6 +28,30 @@ def test_inventario_reenviado_no_duplica(client, db_session):
     assert db_session.scalar(text("SELECT count(*) FROM tickets")) == 40
 
 
+def _fecha_guardada(db_session, evento_id: int = 1):
+    return db_session.scalar(text("SELECT fecha_inicio FROM inventario_eventos WHERE evento_id = :e"), {"e": evento_id})
+
+
+def test_inventario_con_fecha_de_inicio_la_guarda(client, db_session):
+    r = client.post("/internal/inventario", json={**inventario(), "fecha_inicio": "2026-12-20T21:00:00-03:00"})
+    assert r.status_code == 200
+    assert _fecha_guardada(db_session).isoformat() == "2026-12-21T00:00:00+00:00"
+
+
+def test_inventario_sin_fecha_se_recibe_como_antes(client, db_session):
+    r = client.post("/internal/inventario", json=inventario())
+    assert r.status_code == 200 and r.json()["creado"] is True
+    assert _fecha_guardada(db_session) is None
+
+
+def test_inventario_reenviado_no_cambia_la_fecha(client, db_session):
+    client.post("/internal/inventario", json={**inventario(), "fecha_inicio": "2026-12-20T21:00:00+00:00"})
+    r = client.post("/internal/inventario", json={**inventario(), "fecha_inicio": "2027-01-03T21:00:00+00:00"})
+    assert r.json()["creado"] is False
+    assert _fecha_guardada(db_session).isoformat() == "2026-12-20T21:00:00+00:00"
+    assert db_session.scalar(text("SELECT count(*) FROM tickets")) == 40
+
+
 def test_los_tickets_guardan_copia_del_precio(con_inventario, db_session):
     precios = dict(db_session.execute(text("SELECT DISTINCT tipo_zona, precio FROM tickets")).all())
     assert float(precios["numerada"]) == 1500.0 and float(precios["general"]) == 800.0

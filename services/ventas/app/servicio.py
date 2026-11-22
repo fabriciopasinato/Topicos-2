@@ -58,6 +58,22 @@ class ReservaNoVigente(Exception):
     """La reserva vencio o fue cancelada."""
 
 
+class EventoNoALaVenta(Exception):
+    pass
+
+
+def _exigir_evento_a_la_venta(session: Session, evento_id: int) -> None:
+    """FOR SHARE: reservas y pagos no se frenan entre si, pero quedan
+    serializados con el UPDATE de una cancelacion."""
+    cerrado = session.execute(
+        text("SELECT cancelado OR (fecha_inicio IS NOT NULL AND fecha_inicio <= now()) "
+             "FROM inventario_eventos WHERE evento_id = :e FOR SHARE"),
+        {"e": evento_id},
+    ).scalar()
+    if cerrado:
+        raise EventoNoALaVenta()
+
+
 class ReservaPagada(Exception):
     pass
 
@@ -89,7 +105,7 @@ def recibir_inventario(session: Session, inventario: dict) -> bool:
     el inventario ya se habia recibido (y no crea nada)."""
     evento_id = inventario["evento_id"]
     creado = session.execute(
-        pg_insert(InventarioEvento).values(evento_id=evento_id)
+        pg_insert(InventarioEvento).values(evento_id=evento_id, fecha_inicio=inventario.get("fecha_inicio"))
         .on_conflict_do_nothing(index_elements=["evento_id"])
         .returning(InventarioEvento.evento_id)
     ).first()
@@ -109,6 +125,29 @@ def recibir_inventario(session: Session, inventario: dict) -> bool:
         session.execute(insert(Ticket), filas)  # insercion en bloque
     session.commit()
     return True
+
+
+def actualizar_evento(session: Session, evento_id: int, version: int,
+                      fecha_inicio=None, cancelar: bool = False) -> bool:
+    """Devuelve False si lo ignoro por version. En el SET de PostgreSQL las
+    columnas valen lo que tenian ANTES del UPDATE: el CASE depende de eso."""
+    aplicado = session.execute(
+        text(
+            "UPDATE inventario_eventos SET "
+            "  version = :v, "
+            "  cancelado = cancelado OR :cancelar, "
+            "  fecha_inicio = CASE WHEN cancelado THEN fecha_inicio "
+            "                      ELSE COALESCE(CAST(:fecha AS timestamptz), fecha_inicio) END "
+            "WHERE evento_id = :e AND version < :v "
+            "RETURNING evento_id"
+        ),
+        {"v": version, "cancelar": cancelar, "fecha": fecha_inicio, "e": evento_id},
+    ).first()
+    if aplicado is None and session.get(InventarioEvento, evento_id) is None:
+        session.rollback()
+        raise NoEncontrado()
+    session.commit()
+    return aplicado is not None
 
 
 # --- Disponibilidad -------------------------------------------------------------
@@ -161,6 +200,13 @@ def reservar(session: Session, user_id: int, clave: str, pedido: PedidoReserva,
         ).scalar()
         if propia is None:
             return _reserva_previa(session, user_id, clave, pedido)
+
+        # 1b. Evento cancelado o ya iniciado. El rollback descarta la clave.
+        try:
+            _exigir_evento_a_la_venta(session, pedido.evento_id)
+        except EventoNoALaVenta:
+            session.rollback()
+            raise
 
         # 2. La reserva, con su vencimiento calculado por la base.
         reserva_id, hasta = session.execute(
@@ -274,6 +320,12 @@ def pagar(session: Session, reserva_id: int, user_id: int) -> Orden:
     reserva = obtener_reserva(session, reserva_id, user_id)
     if reserva.estado == PAGADA:
         return _orden_de(session, reserva_id)
+
+    try:
+        _exigir_evento_a_la_venta(session, reserva.evento_id)
+    except EventoNoALaVenta:
+        session.rollback()
+        raise
 
     marcada = session.execute(
         text("UPDATE reservas SET estado = 'pagada' "
