@@ -8,17 +8,26 @@ Se puede correr varias veces: los eventos que ya existen (por nombre) se saltean
 
 import json
 import os
+import re
+import subprocess
 import sys
 import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
+from urllib.parse import unquote
 
 GATEWAY = os.environ.get("GATEWAY_URL", "http://localhost:8000")
 OWNER = ("demo-owner@ticketera.local", "demo-owner-123")
 CLIENTE = ("demo-cliente@ticketera.local", "demo-cliente-123")
+PERFIL_CLIENTE = {
+    "nombre": "Cliente", "apellido": "Demo", "dni": "30123456", "fecha_nacimiento": "1990-05-20",
+    "telefono": "11 5555-0000", "calle": "Av. Siempre Viva", "numero": "742", "localidad": "La Plata",
+    "provincia": "Buenos Aires", "codigo_postal": "1900",
+}
 ARGENTINA = timezone(timedelta(hours=-3))
+RAIZ = Path(__file__).resolve().parent.parent
 
 RECINTOS = [
     ("Estadio Central", "Av. del Libertador 7000"),
@@ -91,7 +100,7 @@ def pedir(metodo, ruta, cuerpo=None, token=None, headers=None):
 
 def credenciales_admin():
     valores = {}
-    env = Path(__file__).resolve().parent.parent / ".env"
+    env = RAIZ / ".env"
     if env.exists():
         for linea in env.read_text().splitlines():
             if "=" in linea and not linea.lstrip().startswith("#"):
@@ -108,12 +117,39 @@ def login(email, password):
     return pedir("POST", "/api/auth/login", {"email": email, "password": password})["access_token"]
 
 
-def asegurar_usuario(ruta, credenciales, token=None):
+def asegurar_usuario(ruta, credenciales, token=None, perfil=None):
     try:
-        pedir("POST", ruta, {"email": credenciales[0], "password": credenciales[1]}, token)
+        pedir("POST", ruta, {"email": credenciales[0], "password": credenciales[1], **(perfil or {})}, token)
     except ErrorApi as error:
         if error.status != 409:  # 409: ya existe
             raise
+
+
+def token_de_verificacion(email):
+    # Mailpit no publica puertos: se lo consulta desde el contenedor de auth, como indica el README.
+    consulta = (
+        "import json, urllib.request as u;"
+        f"m = json.load(u.urlopen('http://mailpit:8025/api/v1/search?query=to:{email}'))['messages'];"
+        "print(json.load(u.urlopen('http://mailpit:8025/api/v1/message/' + m[0]['ID']))['Text'] if m else '')"
+    )
+    texto = subprocess.run(
+        ["docker", "compose", "exec", "-T", "auth", "python", "-c", consulta],
+        cwd=RAIZ, capture_output=True, text=True, check=True,
+    ).stdout
+    encontrado = re.search(r"verificar\S*[?&]token=([^\s&]+)", texto)
+    if not encontrado:
+        raise RuntimeError(f"no hay email de verificación para {email} en mailpit")
+    return unquote(encontrado.group(1))
+
+
+def login_verificando(email, password):
+    try:
+        return login(email, password)
+    except ErrorApi as error:
+        if error.status != 403:  # 403: email sin verificar
+            raise
+    pedir("POST", "/api/auth/verificar-email", {"token": token_de_verificacion(email)})
+    return login(email, password)
 
 
 def fecha_en(dias):
@@ -163,10 +199,10 @@ def main():
 
     asegurar_usuario("/api/auth/event-owners", OWNER, admin)
     owner = login(*OWNER)
-    asegurar_usuario("/api/auth/registro", CLIENTE)
+    asegurar_usuario("/api/auth/registro", CLIENTE, perfil=PERFIL_CLIENTE)
     try:
-        cliente = login(*CLIENTE)
-    except ErrorApi as error:
+        cliente = login_verificando(*CLIENTE)
+    except (ErrorApi, RuntimeError, subprocess.CalledProcessError) as error:
         cliente = None
         print(f"! El cliente demo no pudo iniciar sesión; se saltean las compras ({error})")
 
