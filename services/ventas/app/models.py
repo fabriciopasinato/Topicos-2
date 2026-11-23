@@ -25,6 +25,11 @@ ACTIVA = "activa"
 PAGADA = "pagada"
 CANCELADA = "cancelada"
 
+DEVOLUCION_PENDIENTE = "pendiente"
+DEVOLUCION_APROBADA = "aprobada"
+DEVOLUCION_RECHAZADA = "rechazada"
+ESTADOS_DEVOLUCION = (DEVOLUCION_PENDIENTE, DEVOLUCION_APROBADA, DEVOLUCION_RECHAZADA)
+
 
 class InventarioEvento(Base):
     """Marca que el inventario de un evento ya fue recibido (idempotencia).
@@ -110,4 +115,32 @@ class IdempotencyKey(Base):
     key: Mapped[str] = mapped_column(String(255))
     request_hash: Mapped[str] = mapped_column(String(64))
     reserva_id: Mapped[int | None] = mapped_column(ForeignKey("reservas.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Devolucion(Base):
+    __tablename__ = "devoluciones"
+    __table_args__ = (
+        CheckConstraint(
+            "estado IN ('pendiente', 'aprobada', 'rechazada')",
+            name="ck_devoluciones_estado",
+        ),
+        # A lo sumo una solicitud activa (pendiente o aprobada) por compra de ticket.
+        Index(
+            "uq_devoluciones_item_activa", "orden_item_id",
+            unique=True, postgresql_where=text("estado IN ('pendiente', 'aprobada')"),
+        ),
+        Index("ix_devoluciones_estado_created", "estado", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    orden_item_id: Mapped[int] = mapped_column(ForeignKey("orden_items.id"), index=True)
+    orden_id: Mapped[int] = mapped_column(ForeignKey("ordenes.id"), index=True)
+    ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id"), index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    estado: Mapped[str] = mapped_column(String(20), default=DEVOLUCION_PENDIENTE, server_default=DEVOLUCION_PENDIENTE)
+    motivo: Mapped[str | None] = mapped_column(String(500))
+    nota_resolucion: Mapped[str | None] = mapped_column(String(500))
+    resuelto_por: Mapped[int | None] = mapped_column(Integer)
+    resuelto_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

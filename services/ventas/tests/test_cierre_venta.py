@@ -60,3 +60,13 @@ def test_reintento_tras_el_rechazo_se_evalua_de_nuevo(con_inventario, db_session
     _cancelar(con_inventario)
     assert reservar(con_inventario, generales=[(ZONA_GENERAL, 1)], clave="K").status_code == 409
     assert _cantidad(db_session, "SELECT count(*) FROM idempotency_keys") == 0
+
+
+def test_disponibilidad_informa_a_la_venta_segun_estado(con_inventario, db_session):
+    assert con_inventario.get(f"/ventas/eventos/{EVENTO}/disponibilidad").json()["a_la_venta"] is True
+
+    db_session.execute(text("UPDATE inventario_eventos SET fecha_inicio = now() - interval '1 minute'"))
+    assert con_inventario.get(f"/ventas/eventos/{EVENTO}/disponibilidad").json()["a_la_venta"] is False
+
+    db_session.execute(text("UPDATE inventario_eventos SET fecha_inicio = now() + interval '1 day', cancelado = true"))
+    assert con_inventario.get(f"/ventas/eventos/{EVENTO}/disponibilidad").json()["a_la_venta"] is False

@@ -51,3 +51,22 @@ def test_cors_permite_el_origen_del_frontend(crear_gateway):
     )
     assert r.status_code == 200
     assert r.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_cors_en_respuesta_401(crear_gateway):
+    client = crear_gateway(cors_origins="http://localhost:3000")
+    r = client.get(
+        "/api/eventos",
+        headers={"Origin": "http://localhost:3000", "Authorization": "Bearer invalido"},
+    )
+    assert r.status_code == 401
+    assert r.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_cors_en_respuesta_429(crear_gateway):
+    client = crear_gateway(cors_origins="http://localhost:3000", rate_limit_general=1)
+    assert client.get("/api/eventos", headers={"Origin": "http://localhost:3000"}).status_code == 200
+    r = client.get("/api/eventos", headers={"Origin": "http://localhost:3000"})
+    assert r.status_code == 429
+    assert r.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert "Retry-After" in r.headers.get("access-control-expose-headers", "")

@@ -147,3 +147,22 @@ def test_historial_vacio_si_la_reserva_vencio(c, db_session):
     reservar(c, asientos=["A-1"])
     _vencer(db_session)
     assert c.get("/ventas/compras", headers=CLIENTE).json() == []
+
+
+def test_historial_incluye_estado_del_evento_y_devolucion(c):
+    reserva = reservar(c, asientos=["A-1"]).json()
+    _pagar(c, reserva["id"])
+
+    compras = c.get("/ventas/compras", headers=CLIENTE).json()
+    ticket = compras[0]["tickets"][0]
+    assert ticket["orden_item_id"] > 0
+    assert ticket["tipo_zona"] == "numerada"
+    assert ticket["evento_cancelado"] is False
+    assert ticket["evento_estado"] == "activo"
+    assert ticket["devolucion"] is None
+
+    # Tras cancelar el evento, el historial refleja la cancelacion sin consultar a eventos.
+    assert c.put("/internal/eventos/1", json={"version": 2, "cancelado": True}).status_code == 200
+    compras_post = c.get("/ventas/compras", headers=CLIENTE).json()
+    assert compras_post[0]["tickets"][0]["evento_cancelado"] is True
+    assert compras_post[0]["tickets"][0]["evento_estado"] == "cancelado"
