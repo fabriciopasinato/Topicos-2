@@ -40,9 +40,12 @@ def create_app(
     app.include_router(health.router)
     app.include_router(proxy.router)
 
-    # En Starlette los middlewares se ejecutan en orden inverso al registro (LIFO):
-    # CORSMiddleware queda como capa externa para que respuestas 401/429/500 del
-    # pipeline tambien incluyan los headers CORS.
+    # Orden: el ultimo middleware agregado es la capa EXTERNA.
+    # CORS tiene que ser la mas externa: asi tambien las respuestas que genera
+    # el propio pipeline (401, 429) llevan los headers CORS y el navegador
+    # deja leerlas. Si CORS quedara adentro, esas respuestas cortan antes de
+    # pasar por CORS y el frontend solo ve un error de red. Costo aceptado:
+    # los preflight OPTIONS los responde CORS y no quedan en la bitacora.
     app.middleware("http")(pipeline)
     app.add_middleware(
         CORSMiddleware,

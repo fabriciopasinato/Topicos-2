@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { mensajeDeError } from "../api/client.js";
+import { api, mensajeDeError } from "../api/client.js";
 import Mensaje from "../components/Mensaje.jsx";
 import { useSesion } from "../auth/sesion.jsx";
 
@@ -11,19 +11,34 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [codigo, setCodigo] = useState(null);
+  const [info, setInfo] = useState("");
   const [enviando, setEnviando] = useState(false);
 
   async function enviar(e) {
     e.preventDefault();
     setError("");
+    setInfo("");
+    setCodigo(null);
     setEnviando(true);
     try {
       await login(email, password);
       navigate(location.state?.volverA || "/", { replace: true });
     } catch (err) {
+      setCodigo(err.codigo ?? null);
       setError(mensajeDeError(err, { 401: "Email o contraseña incorrectos." }));
     } finally {
       setEnviando(false);
+    }
+  }
+
+  async function reenviar() {
+    try {
+      await api("/api/auth/reenviar-verificacion", { method: "POST", body: { email } });
+      setError("");
+      setInfo("Te enviamos un nuevo email de verificación.");
+    } catch (err) {
+      setError(mensajeDeError(err));
     }
   }
 
@@ -41,8 +56,17 @@ export default function Login() {
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
         </label>
         <Mensaje>{error}</Mensaje>
+        <Mensaje tipo="info">{info}</Mensaje>
+        {codigo === "email_no_verificado" && (
+          <button type="button" className="secundario" onClick={reenviar}>
+            Reenviar email de verificación
+          </button>
+        )}
         <button type="submit" disabled={enviando}>Ingresar</button>
       </form>
+      <p>
+        <Link to="/olvide">Olvidé mi contraseña</Link>
+      </p>
       <p>
         ¿No tenés cuenta? <Link to="/registro">Registrate</Link>
       </p>

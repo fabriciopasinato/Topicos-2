@@ -1,0 +1,156 @@
+import { screen } from "@testing-library/react";
+import { http, HttpResponse } from "msw";
+import { describe, expect, test } from "vitest";
+import { tokensActuales } from "../api/client.js";
+import { API, server } from "../test/server.js";
+import { iniciarSesion, renderEn } from "../test/utilidades.jsx";
+
+const PERFIL = {
+  id: 20, email: "ana@example.com", rol: "cliente", estado: "activa", nombre: "Ana", apellido: "Pérez",
+  dni: "30123456", fecha_nacimiento: "1990-05-17", telefono: "2215551234", calle: "Calle 7", numero: "1234",
+  piso_depto: null, localidad: "La Plata", provincia: "Buenos Aires", codigo_postal: "1900",
+  created_at: "2026-11-01T10:00:00Z", updated_at: "2026-11-05T10:00:00Z", last_login_at: "2026-11-09T10:00:00Z",
+};
+
+describe("perfil (11.4)", () => {
+  test("muestra datos fijos, auditoría y permite editar", async () => {
+    iniciarSesion();
+    let enviado = null;
+    server.use(
+      http.get(`${API}/api/auth/perfil`, () => HttpResponse.json(PERFIL)),
+      http.patch(`${API}/api/auth/perfil`, async ({ request }) => {
+        enviado = await request.json();
+        return HttpResponse.json({ ...PERFIL, ...enviado, updated_at: "2026-11-09T12:00:00Z" });
+      }),
+    );
+    const { user } = renderEn("/perfil");
+    expect(await screen.findByText("30123456")).toBeInTheDocument();
+    expect(screen.getByText("ana@example.com")).toBeInTheDocument();
+    expect(screen.getByText("Último ingreso")).toBeInTheDocument();
+
+    const localidad = screen.getByLabelText("Localidad");
+    await user.clear(localidad);
+    await user.type(localidad, "Berisso");
+    await user.click(screen.getByRole("button", { name: "Guardar cambios" }));
+
+    expect(await screen.findByText("Datos guardados.")).toBeInTheDocument();
+    expect(enviado).toEqual({ localidad: "Berisso" });
+  });
+
+  test("vaciar el piso envía null; un obligatorio vacío viaja como texto vacío", async () => {
+    iniciarSesion();
+    let enviado = null;
+    server.use(
+      http.get(`${API}/api/auth/perfil`, () => HttpResponse.json({ ...PERFIL, piso_depto: "3B" })),
+      http.patch(`${API}/api/auth/perfil`, async ({ request }) => {
+        enviado = await request.json();
+        return HttpResponse.json({ detail: [{ loc: ["body", "localidad"], msg: "obligatorio" }] }, { status: 422 });
+      }),
+    );
+    const { user } = renderEn("/perfil");
+    await user.clear(await screen.findByLabelText("Piso / depto"));
+    await user.clear(screen.getByLabelText("Localidad"));
+    await user.click(screen.getByRole("button", { name: "Guardar cambios" }));
+    expect(await screen.findByText("obligatorio")).toBeInTheDocument();
+    expect(enviado.piso_depto).toBeNull();
+    expect(enviado.localidad).toBe("");
+  });
+
+  test("error de validación junto al campo", async () => {
+    iniciarSesion();
+    server.use(
+      http.get(`${API}/api/auth/perfil`, () => HttpResponse.json(PERFIL)),
+      http.patch(`${API}/api/auth/perfil`, () =>
+        HttpResponse.json({ detail: [{ loc: ["body", "codigo_postal"], msg: "formato inválido" }] }, { status: 422 })),
+    );
+    const { user } = renderEn("/perfil");
+    const cp = await screen.findByLabelText("Código postal");
+    await user.clear(cp);
+    await user.type(cp, "19");
+    await user.click(screen.getByRole("button", { name: "Guardar cambios" }));
+    expect(await screen.findByText("formato inválido")).toBeInTheDocument();
+  });
+
+  test("un owner sin datos de perfil completa solo el teléfono y se guarda", async () => {
+    iniciarSesion("event_owner");
+    const VACIO = {
+      ...PERFIL, rol: "event_owner", email: "owner@example.com", nombre: null, apellido: null, dni: null,
+      fecha_nacimiento: null, telefono: null, calle: null, numero: null, localidad: null, provincia: null,
+      codigo_postal: null,
+    };
+    let enviado = null;
+    server.use(
+      http.get(`${API}/api/auth/perfil`, () => HttpResponse.json(VACIO)),
+      http.patch(`${API}/api/auth/perfil`, async ({ request }) => {
+        enviado = await request.json();
+        return HttpResponse.json({ ...VACIO, ...enviado });
+      }),
+    );
+    const { user } = renderEn("/perfil");
+    await user.type(await screen.findByLabelText("Teléfono"), "2215559999");
+    await user.click(screen.getByRole("button", { name: "Guardar cambios" }));
+    expect(await screen.findByText("Datos guardados.")).toBeInTheDocument();
+    expect(enviado).toEqual({ telefono: "2215559999" });
+  });
+
+  test("sin cambios no llama a la API", async () => {
+    iniciarSesion();
+    let llamadas = 0;
+    server.use(
+      http.get(`${API}/api/auth/perfil`, () => HttpResponse.json(PERFIL)),
+      http.patch(`${API}/api/auth/perfil`, () => {
+        llamadas += 1;
+        return HttpResponse.json(PERFIL);
+      }),
+    );
+    const { user } = renderEn("/perfil");
+    await user.click(await screen.findByRole("button", { name: "Guardar cambios" }));
+    expect(await screen.findByText("No hay cambios para guardar.")).toBeInTheDocument();
+    expect(llamadas).toBe(0);
+  });
+});
+
+describe("cambio de contraseña (11.4)", () => {
+  async function completar(user, actual = "tortuga-azul-42", nueva = "jirafa-violeta-77") {
+    await user.type(screen.getByLabelText("Contraseña actual"), actual);
+    await user.type(screen.getByLabelText("Contraseña nueva"), nueva);
+    await user.type(screen.getByLabelText("Repetir contraseña nueva"), nueva);
+    await user.click(screen.getByRole("button", { name: "Cambiar contraseña" }));
+  }
+
+  test("cambio exitoso guarda los tokens nuevos y mantiene la sesión", async () => {
+    iniciarSesion();
+    server.use(
+      http.post(`${API}/api/auth/perfil/contrasenia`, () =>
+        HttpResponse.json({ access_token: tokensActuales().access, refresh_token: "R-NUEVO", expires_in: 7200 })),
+    );
+    const { user } = renderEn("/perfil/contrasenia");
+    await completar(user);
+    expect(await screen.findByText(/Se cerraron tus otras sesiones/)).toBeInTheDocument();
+    expect(tokensActuales().refresh).toBe("R-NUEVO");
+    expect(screen.getByRole("link", { name: "Mi perfil" })).toBeInTheDocument();
+  });
+
+  test("contraseña actual incorrecta (422 en actual): error junto al campo y la sesión sigue", async () => {
+    iniciarSesion();
+    let refresh = 0;
+    server.use(
+      http.post(`${API}/api/auth/perfil/contrasenia`, () =>
+        HttpResponse.json(
+          { detail: [{ loc: ["body", "actual"], msg: "La contraseña actual no es correcta.", type: "value_error" }] },
+          { status: 422 },
+        )),
+      http.post(`${API}/api/auth/refresh`, () => {
+        refresh += 1;
+        return HttpResponse.json({ detail: "x" }, { status: 401 });
+      }),
+    );
+    const { user } = renderEn("/perfil/contrasenia");
+    await completar(user, "no-es-la-actual");
+    const mensaje = await screen.findByText("La contraseña actual no es correcta.");
+    expect(screen.getByLabelText("Contraseña actual")).toHaveAttribute("aria-describedby", mensaje.id);
+    expect(refresh).toBe(0);
+    expect(tokensActuales().refresh).toBe("R1");
+    expect(screen.getByRole("link", { name: "Mi perfil" })).toBeInTheDocument();
+  });
+});

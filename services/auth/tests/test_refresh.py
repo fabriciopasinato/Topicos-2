@@ -10,13 +10,12 @@ from sqlalchemy.orm import Session
 from app import servicio
 from app.config import get_settings
 
-DATOS = {"email": "ana@example.com", "password": "clave-segura-1"}
+from tests.conftest import DATOS_REGISTRO, login
 
 
 @pytest.fixture
-def tokens(client):
-    client.post("/auth/registro", json=DATOS)
-    return client.post("/auth/login", json=DATOS).json()
+def tokens(client, cliente_activo):
+    return login(client).json()
 
 
 def test_refresh_exitoso_entrega_un_par_nuevo(client, tokens):
@@ -53,8 +52,12 @@ def test_refresh_emite_el_rol_actual(client, tokens, db_session):
 def test_refresh_concurrente_con_el_mismo_token_solo_gana_uno(db_concurrente):
     settings = get_settings()
     with Session(db_concurrente) as session:
-        servicio.registrar_cliente(session, "conc@example.com", "clave-segura-1")
-        refresh = servicio.login(session, settings, "conc@example.com", "clave-segura-1").refresh_token
+        datos = dict(DATOS_REGISTRO)
+        email, password = datos.pop("email"), datos.pop("password")
+        servicio.registrar_cliente(session, settings, servicio.Efectos(), email, password, **datos)
+        session.execute(text("UPDATE users SET estado = 'activa'"))
+        session.commit()
+        refresh = servicio.login(session, settings, servicio.Efectos(), email, password).refresh_token
 
     barrera = threading.Barrier(2)
     resultados = []
@@ -75,3 +78,8 @@ def test_refresh_concurrente_con_el_mismo_token_solo_gana_uno(db_concurrente):
         h.join()
 
     assert sorted(resultados) == ["401", "ok"]
+
+
+def test_refresh_de_una_cuenta_bloqueada_responde_401(client, tokens, db_session):
+    db_session.execute(text("UPDATE users SET estado = 'bloqueada', motivo_bloqueo = 'restablecimiento_admin'"))
+    assert client.post("/auth/refresh", json={"refresh_token": tokens["refresh_token"]}).status_code == 401

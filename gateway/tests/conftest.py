@@ -71,6 +71,22 @@ def redis_sync():
 
 
 @pytest.fixture(autouse=True)
+def ventana_de_rate_limit_fija(monkeypatch):
+    """El rate limit usa ventanas por minuto: si un test cruzara el cambio de
+    minuto, el contador se reiniciaria a mitad del test. Se fija el reloj del
+    rate limit al segundo 1 del proximo minuto (futuro, asi las claves de
+    Redis no vencen durante el test)."""
+    import time as _time
+    from types import SimpleNamespace
+
+    from app import rate_limit
+
+    fijo = (int(_time.time()) // 60 + 1) * 60 + 1
+    # Solo se reemplaza la referencia que usa rate_limit, no el modulo time global.
+    monkeypatch.setattr(rate_limit, "time", SimpleNamespace(time=lambda: fijo))
+
+
+@pytest.fixture(autouse=True)
 def base_y_redis_limpios(engine_sync, redis_sync):
     """Cada test arranca con todas las tablas vacias y Redis vacio."""
     redis_sync.flushdb()
@@ -100,10 +116,13 @@ def settings_de_test(**cambios) -> Settings:
     return Settings(**base)
 
 
-def token(sub: str = "7", rol: str = "cliente", minutos: int = 60, secreto: str = JWT_SECRET_TEST) -> str:
-    """JWT de acceso como los que emite auth."""
-    exp = datetime.now(timezone.utc) + timedelta(minutes=minutos)
-    return jwt.encode({"sub": sub, "rol": rol, "exp": exp}, secreto, algorithm="HS256")
+def token(sub: str = "7", rol: str = "cliente", minutos: int = 60, secreto: str = JWT_SECRET_TEST,
+          iat: int | None = None) -> str:
+    """JWT de acceso como los que emite auth (con iat)."""
+    ahora = datetime.now(timezone.utc)
+    datos = {"sub": sub, "rol": rol, "exp": ahora + timedelta(minutes=minutos),
+             "iat": iat if iat is not None else int(ahora.timestamp())}
+    return jwt.encode(datos, secreto, algorithm="HS256")
 
 
 class ServiciosFalsos:

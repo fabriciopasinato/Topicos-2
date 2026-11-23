@@ -12,6 +12,7 @@ HEADERS_DE_IDENTIDAD = (b"x-user-id", b"x-user-role")
 class Identidad:
     user_id: str
     rol: str
+    emitido: int | None = None  # claim iat (epoch en segundos)
 
 
 class TokenInvalido(Exception):
@@ -27,15 +28,21 @@ def validar_token(token: str, secreto: str) -> Identidad:
     rol = datos.get("rol")
     if not isinstance(rol, str):
         raise TokenInvalido("el token no tiene rol")
-    return Identidad(user_id=str(datos["sub"]), rol=rol)
+    iat = datos.get("iat")
+    return Identidad(user_id=str(datos["sub"]), rol=rol, emitido=int(iat) if isinstance(iat, (int, float)) else None)
 
 
 # Rutas que no requieren token. El resto de /api/* exige un token valido.
-_PUBLICAS_EXACTAS = {
-    ("POST", "/api/auth/login"),
-    ("POST", "/api/auth/registro"),
-    ("POST", "/api/auth/refresh"),
-}
+RUTAS_PUBLICAS_AUTH = (
+    "/api/auth/login",
+    "/api/auth/registro",
+    "/api/auth/refresh",
+    "/api/auth/verificar-email",
+    "/api/auth/reenviar-verificacion",
+    "/api/auth/olvide-contrasenia",
+    "/api/auth/restablecer-contrasenia",
+)
+_PUBLICAS_EXACTAS = {("POST", ruta) for ruta in RUTAS_PUBLICAS_AUTH}
 _DISPONIBILIDAD = re.compile(r"^/api/ventas/eventos/[^/]+/disponibilidad$")
 
 
