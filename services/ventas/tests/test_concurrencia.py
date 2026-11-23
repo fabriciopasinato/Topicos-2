@@ -165,3 +165,26 @@ def test_dos_pagos_simultaneos_crean_una_sola_orden(engine_paralelo):
     assert resultados[0][1] == resultados[1][1]
     with engine_paralelo.connect() as c:
         assert c.scalar(text("SELECT count(*) FROM ordenes")) == 1
+
+
+def test_reservas_concurrentes_con_la_cancelacion_nunca_venden(engine_paralelo):
+    """Cada reserva o ve la cancelacion, o se crea antes y su pago se rechaza."""
+    with engine_paralelo.begin() as c:
+        c.execute(text("UPDATE inventario_eventos SET fecha_inicio = now() + interval '1 day'"))
+
+    reservas = [_reservar(uid, _pedido(generales=[(ZONA_GENERAL, 1)])) for uid in range(1, 6)]
+    cancelar = lambda s: servicio.actualizar_evento(s, EVENTO, 2, cancelar=True)  # noqa: E731
+    resultados = _en_paralelo(engine_paralelo, [*reservas, cancelar])
+
+    assert resultados[-1][0] == "ok"
+    assert {r[0] for r in resultados[:-1]} <= {"ok", "EventoNoALaVenta"}
+
+    for uid, (estado, reserva_id) in zip(range(1, 6), resultados[:-1]):
+        if estado == "ok":
+            with Session(engine_paralelo) as s, pytest.raises(servicio.EventoNoALaVenta):
+                servicio.pagar(s, reserva_id, uid)
+
+    with engine_paralelo.connect() as c:
+        assert c.scalar(text("SELECT count(*) FROM tickets WHERE estado = 'vendido'")) == 0
+        assert c.scalar(text("SELECT count(*) FROM ordenes")) == 0
+        assert c.scalar(text("SELECT cancelado FROM inventario_eventos WHERE evento_id = :e"), {"e": EVENTO})

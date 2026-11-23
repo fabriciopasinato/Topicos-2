@@ -12,6 +12,9 @@ import Evento from "./pages/Evento.jsx";
 import Login from "./pages/Login.jsx";
 import Olvide from "./pages/Olvide.jsx";
 import Perfil from "./pages/Perfil.jsx";
+import GestionEvento from "./pages/owner/GestionEvento.jsx";
+import MisEventos from "./pages/owner/MisEventos.jsx";
+import NuevoEvento from "./pages/owner/NuevoEvento.jsx";
 import Registro from "./pages/Registro.jsx";
 import Reserva from "./pages/Reserva.jsx";
 import Restablecer from "./pages/Restablecer.jsx";
@@ -21,6 +24,8 @@ function AlLogin() {
   const { avisoCierre } = useSesion();
   return <Navigate to="/login" replace state={avisoCierre ? { aviso: avisoCierre } : undefined} />;
 }
+
+export const ROLES_GESTORES = ["event_owner", "administrador"];
 
 function SoloConSesion({ children }) {
   const { usuario } = useSesion();
@@ -45,6 +50,7 @@ function Encabezado() {
         {usuario ? (
           <>
             {usuario.rol === "administrador" && <Link to="/admin/usuarios">Administración</Link>}
+            {ROLES_GESTORES.includes(usuario.rol) && <Link to="/owner">Mis eventos</Link>}
             <Link to="/compras">Mis compras</Link>
             <Link to="/perfil">Mi perfil</Link>
             <button type="button" className="enlace" onClick={logout}>
@@ -91,6 +97,9 @@ function Rutas() {
           <Route path="/admin/usuarios" element={admin(<AdminUsuarios />)} />
           <Route path="/admin/usuarios/:id" element={admin(<AdminUsuario />)} />
           <Route path="/admin/event-owners" element={admin(<AdminEventOwners />)} />
+          <Route path="/owner" element={<SoloRol roles={ROLES_GESTORES}><MisEventos /></SoloRol>} />
+          <Route path="/owner/eventos/nuevo" element={<SoloRol roles={ROLES_GESTORES}><NuevoEvento /></SoloRol>} />
+          <Route path="/owner/eventos/:id" element={<SoloRol roles={ROLES_GESTORES}><GestionEvento /></SoloRol>} />
           <Route path="*" element={<p>Página no encontrada.</p>} />
         </Routes>
       </main>

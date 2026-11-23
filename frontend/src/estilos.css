@@ -258,12 +258,20 @@ select[aria-invalid="true"] {
   margin: 0;
 }
 
+.estado {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--borde);
+  border-radius: 999px;
+  font-size: 0.85em;
+}
+
 .filtros {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
   align-items: end;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .tabla {

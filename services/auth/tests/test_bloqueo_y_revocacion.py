@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app import revocacion, servicio
 from app.config import get_settings
 from app.models import Usuario
-from tests.conftest import DATOS_REGISTRO, activar, login
+from tests.conftest import DATOS_REGISTRO, activar, login, token_del_email
 
 
 def _estado(db_session):
@@ -60,8 +60,27 @@ def test_quinto_intento_bloquea_revoca_y_envia_un_email(client, cliente_activo, 
     user_id = db_session.scalar(select(Usuario.id))
     assert redis_test.get(f"revocado:{user_id}") is not None
     assert client.post("/auth/refresh", json={"refresh_token": refresh}).status_code == 401
-    # Con la contraseña correcta ahora se informa el bloqueo.
-    assert login(client).json()["codigo"] == "cuenta_bloqueada"
+    # Con la contraseña correcta responde igual que con una incorrecta.
+    assert login(client).json()["codigo"] == "credenciales_invalidas"
+
+
+def test_quinto_intento_bloquea_una_cuenta_sin_verificar(client, db_session, enviador):
+    assert client.post("/auth/registro", json=DATOS_REGISTRO).status_code == 201
+    db_session.execute(text("UPDATE users SET intentos_fallidos = 4"))
+    enviador.enviados.clear()
+
+    assert login(client, password="incorrecta-1234").status_code == 401
+    estado = _estado(db_session)
+    assert (estado.estado, estado.motivo_bloqueo) == ("bloqueada", "intentos_fallidos")
+    [email] = enviador.enviados
+    assert "bloqueó" in email.asunto
+
+    # El link del email restablece la contraseña y deja la cuenta activa (verificada).
+    token = token_del_email(email)
+    r = client.post("/auth/restablecer-contrasenia", json={"token": token, "contrasenia": "frase-nueva-segura-9"})
+    assert r.status_code == 200
+    assert _estado(db_session).estado == "activa"
+    assert login(client, password="frase-nueva-segura-9").status_code == 200
 
 
 def test_login_exitoso_reinicia_el_contador(client, cliente_activo, db_session):

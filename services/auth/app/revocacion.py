@@ -4,7 +4,9 @@
    la transaccion de la operacion).
 2. En Redis, despues del commit: revocado:<user_id> = instante (epoch en
    segundos), con TTL igual a la vida del token de acceso. El gateway rechaza
-   los tokens de acceso con iat < ese instante.
+   los tokens de acceso con iat < ese instante. Por defecto el instante es el
+   de la publicacion; cuando la operacion emite un token nuevo (cambio de
+   contrasenia) se toma antes de firmarlo, para que ese token no nazca revocado.
 
 Contrato con el gateway: auth es el unico que ESCRIBE revocado:*, el gateway
 el unico que lo LEE.

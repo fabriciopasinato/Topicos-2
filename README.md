@@ -10,6 +10,7 @@ Trabajo final de Tópicos II (UNLP). Plataforma de venta de entradas con arquite
 | `gateway` | Único punto de entrada: JWT, rate limit, bitácora | `8000` |
 | `auth` | Usuarios, roles y tokens | (solo red interna, 8001) |
 | `eventos` | Eventos, recintos y zonas | (solo red interna, 8002) |
+| `eventos-cron` | Reintenta las reprogramaciones y cancelaciones pendientes hacia ventas | (ninguno) |
 | `ventas` | Inventario, reservas y compras | (solo red interna, 8003) |
 | `postgres` | Una base y un usuario por servicio | (solo red interna, 5432) |
 | `redis` | Contadores del rate limit y revocación de sesiones | (solo red interna, 6379) |
@@ -36,7 +37,15 @@ Con eso:
 - Gateway: http://localhost:8000 (estado en http://localhost:8000/health)
 - Administrador inicial: el `ADMIN_EMAIL` / `ADMIN_PASSWORD` del `.env`
 
-`docker compose up -d` es idempotente: crea lo que falta (red, volúmenes, imágenes, contenedores) y reutiliza lo que ya existe. Los contenedores arrancan en orden según su estado de salud: `postgres` y `redis`, luego `auth`, `eventos` y `ventas`, luego `gateway`, luego `frontend`. Si un servicio se cae, Docker lo reinicia solo.
+`docker compose up -d` es idempotente: crea lo que falta (red, volúmenes, imágenes, contenedores) y reutiliza lo que ya existe. Los contenedores arrancan en orden según su estado de salud: `postgres` y `redis`, luego `auth`, `eventos` y `ventas`, luego `gateway` y `eventos-cron`, luego `frontend`. `eventos-cron` espera solo a `eventos` (que aplica las migraciones de su base), no a `ventas`. Si un servicio se cae, Docker lo reinicia solo.
+
+### eventos-cron
+
+Cuando un owner reprograma o cancela un evento publicado, eventos guarda la operación antes de avisarle a ventas (*transactional outbox*). Si ventas no responde, la operación queda pendiente y `eventos-cron` la reintenta sola, con espera creciente (5 s, 10 s, 20 s... hasta 60 s), hasta que ventas la confirme.
+
+- Ver qué está reintentando: `docker compose logs -f eventos-cron` (cada fallo muestra la operación, el evento y el número de intento).
+- Configuración en `.env`: `CRON_INTERVALO_SEGUNDOS` (cada cuánto revisa, 5 por defecto) y `CRON_LOTE` (operaciones como máximo por ciclo, 20 por defecto).
+- Salud: el healthcheck falla si el proceso no completa un ciclo en 3 intervalos (`python -m app.cron --salud`).
 
 ## Comandos habituales
 

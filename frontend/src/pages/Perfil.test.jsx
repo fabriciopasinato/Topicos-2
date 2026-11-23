@@ -39,6 +39,25 @@ describe("perfil (11.4)", () => {
     expect(enviado).not.toHaveProperty("dni");
   });
 
+  test("vaciar el piso envía null; un obligatorio vacío viaja como texto vacío", async () => {
+    iniciarSesion();
+    let enviado = null;
+    server.use(
+      http.get(`${API}/api/auth/perfil`, () => HttpResponse.json({ ...PERFIL, piso_depto: "3B" })),
+      http.patch(`${API}/api/auth/perfil`, async ({ request }) => {
+        enviado = await request.json();
+        return HttpResponse.json({ detail: [{ loc: ["body", "localidad"], msg: "obligatorio" }] }, { status: 422 });
+      }),
+    );
+    const { user } = renderEn("/perfil");
+    await user.clear(await screen.findByLabelText("Piso / depto"));
+    await user.clear(screen.getByLabelText("Localidad"));
+    await user.click(screen.getByRole("button", { name: "Guardar cambios" }));
+    expect(await screen.findByText("obligatorio")).toBeInTheDocument();
+    expect(enviado.piso_depto).toBeNull();
+    expect(enviado.localidad).toBe("");
+  });
+
   test("error de validación junto al campo", async () => {
     iniciarSesion();
     server.use(
@@ -73,14 +92,26 @@ describe("cambio de contraseña (11.4)", () => {
     expect(screen.getByRole("link", { name: "Mi perfil" })).toBeInTheDocument();
   });
 
-  test("contraseña actual incorrecta", async () => {
+  test("contraseña actual incorrecta (422 en actual): error junto al campo y la sesión sigue", async () => {
     iniciarSesion();
+    let refresh = 0;
     server.use(
-      http.post(`${API}/api/auth/perfil/contrasenia`, () => HttpResponse.json({ detail: "x" }, { status: 401 })),
+      http.post(`${API}/api/auth/perfil/contrasenia`, () =>
+        HttpResponse.json(
+          { detail: [{ loc: ["body", "actual"], msg: "La contraseña actual no es correcta.", type: "value_error" }] },
+          { status: 422 },
+        )),
+      http.post(`${API}/api/auth/refresh`, () => {
+        refresh += 1;
+        return HttpResponse.json({ detail: "x" }, { status: 401 });
+      }),
     );
     const { user } = renderEn("/perfil/contrasenia");
     await completar(user, "no-es-la-actual");
-    expect(await screen.findByText("La contraseña actual no es correcta.")).toBeInTheDocument();
+    const mensaje = await screen.findByText("La contraseña actual no es correcta.");
+    expect(screen.getByLabelText("Contraseña actual")).toHaveAttribute("aria-describedby", mensaje.id);
+    expect(refresh).toBe(0);
     expect(tokensActuales().refresh).toBe("R1");
+    expect(screen.getByRole("link", { name: "Mi perfil" })).toBeInTheDocument();
   });
 });

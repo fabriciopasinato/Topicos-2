@@ -44,20 +44,41 @@ def test_cuenta_sin_verificar_con_contrasenia_incorrecta_no_revela_el_estado(cli
     client.post("/auth/registro", json=DATOS_REGISTRO)
     r = login(client, password="otra-clave-larga")
     assert r.status_code == 401 and r.json()["codigo"] == "credenciales_invalidas"
-    # Los intentos no se cuentan en cuentas que no estan activas.
+    # El intento cuenta igual que en una cuenta activa.
+    assert _usuario(db_session).intentos_fallidos == 1
+
+
+def test_contrasenia_correcta_en_cuenta_sin_verificar_reinicia_el_contador(client, db_session):
+    client.post("/auth/registro", json=DATOS_REGISTRO)
+    db_session.execute(text("UPDATE users SET intentos_fallidos = 3"))
+    r = login(client)
+    assert r.status_code == 403 and r.json()["codigo"] == "email_no_verificado"
     assert _usuario(db_session).intentos_fallidos == 0
 
 
-def test_cuenta_bloqueada_con_contrasenia_correcta(client, cliente_activo, db_session):
+def _bloquear(db_session):
     db_session.execute(text("UPDATE users SET estado = 'bloqueada', motivo_bloqueo = 'intentos_fallidos'"))
+
+
+def test_cuenta_bloqueada_con_contrasenia_correcta_responde_401_generico(client, cliente_activo, db_session):
+    _bloquear(db_session)
     r = login(client)
-    assert r.status_code == 403 and r.json()["codigo"] == "cuenta_bloqueada"
+    assert r.status_code == 401 and r.json()["codigo"] == "credenciales_invalidas"
+    assert "access_token" not in r.json()
 
 
 def test_cuenta_bloqueada_con_contrasenia_incorrecta_responde_401_generico(client, cliente_activo, db_session):
-    db_session.execute(text("UPDATE users SET estado = 'bloqueada', motivo_bloqueo = 'intentos_fallidos'"))
+    _bloquear(db_session)
     r = login(client, password="otra-clave-larga")
     assert r.status_code == 401 and r.json()["codigo"] == "credenciales_invalidas"
+
+
+def test_cuenta_bloqueada_no_distingue_contrasenia_correcta_de_incorrecta(client, cliente_activo, db_session):
+    _bloquear(db_session)
+    correcta = login(client)
+    incorrecta = login(client, password="otra-clave-larga")
+    assert correcta.status_code == incorrecta.status_code == 401
+    assert correcta.json() == incorrecta.json()
 
 
 def test_expiracion_por_defecto_es_2_horas(client, cliente_activo):

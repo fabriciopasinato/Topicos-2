@@ -51,14 +51,14 @@ describe("login (11.2)", () => {
     expect(reenviado).toEqual({ email: "ana@example.com" });
   });
 
-  test("cuenta bloqueada indica revisar el email", async () => {
-    loginResponde(403, {
-      detail: "Tu cuenta está bloqueada. Revisá tu email para restablecer la contraseña.",
-      codigo: "cuenta_bloqueada",
-    });
+  test("cuenta bloqueada responde como credenciales inválidas y ofrece recuperar", async () => {
+    // El backend no distingue una cuenta bloqueada (no confirma la contraseña):
+    // el aviso llega por email y el login ofrece "Olvidé mi contraseña".
+    loginResponde(401, { detail: "Email o contraseña incorrectos.", codigo: "credenciales_invalidas" });
     const { user } = renderEn("/login");
     await completarLogin(user);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Tu cuenta está bloqueada");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Email o contraseña incorrectos.");
+    expect(screen.getByRole("link", { name: "Olvidé mi contraseña" })).toBeInTheDocument();
   });
 
   test("demasiados intentos (429) muestra el tiempo de espera", async () => {

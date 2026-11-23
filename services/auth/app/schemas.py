@@ -69,6 +69,18 @@ class PerfilPatch(BaseModel):
     provincia: Provincia | None = None
     codigo_postal: str | None = Field(default=None, pattern=CODIGO_POSTAL)
 
+    # Solo corre si el campo vino en el cuerpo: "no mandarlo" no cambia nada,
+    # "mandarlo en null" en un obligatorio es un error (solo piso_depto se vacia).
+    @field_validator(
+        "nombre", "apellido", "fecha_nacimiento", "telefono", "calle", "numero", "localidad", "provincia",
+        "codigo_postal", mode="before",
+    )
+    @classmethod
+    def _obligatorio_sin_null(cls, valor):
+        if valor is None:
+            raise ValueError("este dato es obligatorio y no puede quedar vacío")
+        return valor
+
     @field_validator("fecha_nacimiento")
     @classmethod
     def _fecha_valida(cls, valor: date | None) -> date | None:
@@ -78,6 +90,12 @@ class PerfilPatch(BaseModel):
 class EventOwnerIn(BaseModel):
     email: str = Field(pattern=EMAIL, max_length=255)
     password: str = Field(max_length=1000)
+
+
+# Filtros del listado de cuentas: con Literal, FastAPI valida el valor (422).
+# Deben coincidir con models.ROLES y models.ESTADOS (lo controla un test).
+RolFiltro = Literal["administrador", "event_owner", "cliente"]
+EstadoFiltro = Literal["pendiente_verificacion", "activa", "bloqueada"]
 
 
 class LoginIn(BaseModel):

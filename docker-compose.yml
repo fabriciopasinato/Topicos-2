@@ -6,7 +6,7 @@
 # dentro de la red (postgres:5432, auth:8001, ...).
 #
 # Orden de arranque (por healthchecks):
-#   postgres, redis -> auth, eventos, ventas -> gateway -> frontend
+#   postgres, redis -> auth, eventos, ventas -> gateway, eventos-cron -> frontend
 # Los microservicios NO dependen entre si.
 
 name: ticketera
@@ -97,6 +97,23 @@ services:
     healthcheck:
       <<: *healthcheck-defaults
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=3)"]
+
+  eventos-cron:
+    build: ./services/eventos
+    command: ["python", "-m", "app.cron"]
+    init: true  # sin init, python es PID 1 e ignora las senales (docker stop)
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://eventos:${EVENTOS_DB_PASSWORD}@postgres:5432/eventos_db
+      VENTAS_URL: http://ventas:8003
+      CRON_INTERVALO_SEGUNDOS: ${CRON_INTERVALO_SEGUNDOS:-5}
+      CRON_LOTE: ${CRON_LOTE:-20}
+    depends_on:
+      eventos:  # aplica las migraciones de eventos_db
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: ["CMD", "python", "-m", "app.cron", "--salud"]
 
   ventas:
     build: ./services/ventas

@@ -1,13 +1,32 @@
 /**
  * Cliente de la API del gateway.
  *
- * - Agrega el token de acceso a cada solicitud.
- * - Ante un 401, renueva el token con el refresh token y reintenta UNA vez.
+ * - Agrega el token de acceso a cada solicitud, salvo a las rutas publicas de auth.
+ * - Ante un 401 en una ruta protegida (incluidas perfil y administracion de
+ *   auth), renueva el token con el refresh token y reintenta UNA vez.
  *   Si la renovacion falla, borra la sesion y avisa (redirige al login).
  * - Los errores se lanzan como ApiError con status, detalle y Retry-After.
  */
 
 export const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
+/**
+ * Rutas de auth que no requieren sesion (las mismas que RUTAS_PUBLICAS_AUTH
+ * en gateway/app/seguridad.py). Se llaman sin token, para que una sesion
+ * vencida o revocada no las haga fallar, y un 401 en ellas es una respuesta
+ * de negocio (credenciales o refresh invalidos), no algo que se renueve.
+ */
+export const RUTAS_PUBLICAS_AUTH = Object.freeze([
+  "/api/auth/login",
+  "/api/auth/registro",
+  "/api/auth/refresh",
+  "/api/auth/verificar-email",
+  "/api/auth/reenviar-verificacion",
+  "/api/auth/olvide-contrasenia",
+  "/api/auth/restablecer-contrasenia",
+]);
+
+const esPublicaDeAuth = (ruta) => RUTAS_PUBLICAS_AUTH.includes(ruta.split("?")[0]);
 
 const CLAVE = "ticketera.tokens";
 
@@ -30,7 +49,7 @@ export class ApiError extends Error {
     this.status = status;
     this.detail = detail;
     this.retryAfter = retryAfter;
-    // Codigo de negocio (por ejemplo "cuenta_bloqueada") para no parsear texto.
+    // Codigo de negocio (por ejemplo "email_no_verificado") para no parsear texto.
     this.codigo = codigo;
   }
 
@@ -78,7 +97,7 @@ export function configurarAlFallarAuth(fn) {
 function enviar(ruta, { method = "GET", body, headers = {} }) {
   const final = { ...headers };
   if (body !== undefined) final["Content-Type"] = "application/json";
-  if (tokens?.access) final.Authorization = `Bearer ${tokens.access}`;
+  if (tokens?.access && !esPublicaDeAuth(ruta)) final.Authorization = `Bearer ${tokens.access}`;
   return fetch(`${API_URL}${ruta}`, {
     method,
     headers: final,
@@ -111,7 +130,7 @@ async function renovar() {
 export async function api(ruta, opciones = {}) {
   let r = await enviar(ruta, opciones);
 
-  if (r.status === 401 && tokens?.refresh && !ruta.startsWith("/api/auth/")) {
+  if (r.status === 401 && tokens?.refresh && !esPublicaDeAuth(ruta)) {
     if (await renovar()) {
       r = await enviar(ruta, opciones);
     } else {

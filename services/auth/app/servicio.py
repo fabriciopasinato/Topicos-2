@@ -5,6 +5,7 @@ revocacion en Redis) no se ejecutan aca: se anotan en `Efectos` y las ejecuta
 la capa HTTP. Asi un rollback nunca deja un email enviado ni una marca en Redis.
 """
 
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -40,7 +41,7 @@ class CredencialesInvalidas(Exception):
 class CuentaNoActiva(Exception):
     def __init__(self, codigo: str):
         super().__init__(codigo)
-        self.codigo = codigo  # email_no_verificado | cuenta_bloqueada
+        self.codigo = codigo  # email_no_verificado (una cuenta bloqueada responde como credencial invalida)
 
 
 class RefreshInvalido(Exception):
@@ -76,7 +77,8 @@ class Efectos:
     """Acciones a ejecutar despues del commit."""
 
     emails: list[Email] = field(default_factory=list)
-    revocaciones: list[int] = field(default_factory=list)  # user_ids
+    # (user_id, instante): instante None = el momento en que se publica, despues del commit.
+    revocaciones: list[tuple[int, int | None]] = field(default_factory=list)
 
 
 CAMPOS_PERFIL = (
@@ -95,9 +97,9 @@ def _validar_contrasenia(contrasenia: str, email: str) -> None:
         raise ContraseniaInvalida(motivos)
 
 
-def _bloquear_sesiones(session: Session, user_id: int, efectos: Efectos) -> None:
+def _bloquear_sesiones(session: Session, user_id: int, efectos: Efectos, instante: int | None = None) -> None:
     revocacion.revocar_refresh_tokens(session, user_id)
-    efectos.revocaciones.append(user_id)
+    efectos.revocaciones.append((user_id, instante))
 
 
 def _enviar_restablecimiento(session, settings, usuario, plantilla, efectos) -> None:
@@ -201,14 +203,19 @@ def login(session: Session, settings: Settings, efectos: Efectos, email: str, pa
     correcta = seguridad.verificar_password(usuario.password_hash if usuario else None, password)
 
     if not correcta:
-        if usuario is not None and usuario.estado == ACTIVA:
+        if usuario is not None and usuario.estado in (ACTIVA, PENDIENTE_VERIFICACION):
             _registrar_intento_fallido(session, settings, efectos, usuario)
         raise CredencialesInvalidas()  # mismo error para cualquier caso: no revela el estado
 
-    if usuario.estado == PENDIENTE_VERIFICACION:
-        raise CuentaNoActiva("email_no_verificado")
+    # Una cuenta bloqueada responde igual con la contrasenia correcta o no: el
+    # login no confirma contrasenias de cuentas bloqueadas (el aviso va por email).
     if usuario.estado == BLOQUEADA:
-        raise CuentaNoActiva("cuenta_bloqueada")
+        raise CredencialesInvalidas()
+    if usuario.estado == PENDIENTE_VERIFICACION:
+        # La contrasenia correcta corta la racha de intentos fallidos.
+        session.execute(text("UPDATE users SET intentos_fallidos = 0 WHERE id = :u"), {"u": usuario.id})
+        session.commit()
+        raise CuentaNoActiva("email_no_verificado")
 
     session.execute(
         text("UPDATE users SET intentos_fallidos = 0, last_login_at = now() WHERE id = :u"), {"u": usuario.id}
@@ -227,7 +234,7 @@ def _registrar_intento_fallido(session, settings, efectos, usuario) -> None:
             "UPDATE users SET intentos_fallidos = intentos_fallidos + 1, "
             "  estado = CASE WHEN intentos_fallidos + 1 >= :max THEN 'bloqueada' ELSE estado END, "
             "  motivo_bloqueo = CASE WHEN intentos_fallidos + 1 >= :max THEN :motivo ELSE motivo_bloqueo END "
-            "WHERE id = :u AND estado = 'activa' RETURNING intentos_fallidos"
+            "WHERE id = :u AND estado IN ('activa', 'pendiente_verificacion') RETURNING intentos_fallidos"
         ),
         {"u": usuario.id, "max": settings.intentos_maximos, "motivo": MOTIVO_INTENTOS},
     ).first()
@@ -332,7 +339,10 @@ def cambiar_contrasenia(session: Session, settings: Settings, efectos: Efectos, 
         raise CredencialesInvalidas()
     _validar_contrasenia(nueva, usuario.email)
     usuario.password_hash = seguridad.hashear_password(nueva)
-    _bloquear_sesiones(session, user_id, efectos)
+    # La marca se toma ANTES de firmar el token nuevo: su iat queda >= marca y el
+    # gateway (que rechaza iat < marca) lo acepta aunque el commit cruce de segundo.
+    instante = int(time.time())
+    _bloquear_sesiones(session, user_id, efectos, instante)
     tokens = _emitir_tokens(session, settings, usuario)  # la sesion actual sigue
     session.commit()
     return tokens
@@ -341,16 +351,22 @@ def cambiar_contrasenia(session: Session, settings: Settings, efectos: Efectos, 
 # --- Administracion ------------------------------------------------------------------
 
 
+def _literal(texto: str) -> str:
+    """Escapa los comodines de LIKE para que la busqueda sea literal."""
+    return texto.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def listar_cuentas(session: Session, q: str | None, rol: str | None, estado: str | None,
                    pagina: int, tamanio: int) -> tuple[list[Usuario], int]:
     consulta = select(Usuario)
     if q:
-        patron = f"%{q.strip()}%"
+        texto = _literal(q.strip())
+        patron = f"%{texto}%"
         consulta = consulta.where(
             or_(
-                Usuario.email.ilike(patron),
-                func.unaccent(Usuario.apellido).ilike(func.unaccent(patron)),
-                Usuario.dni.like(f"{q.strip()}%"),
+                Usuario.email.ilike(patron, escape="\\"),
+                func.unaccent(Usuario.apellido).ilike(func.unaccent(patron), escape="\\"),
+                Usuario.dni.like(f"{texto}%", escape="\\"),
             )
         )
     if rol:

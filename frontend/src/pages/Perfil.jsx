@@ -36,7 +36,11 @@ export default function Perfil() {
     setError("");
     setErrores({});
     try {
-      const cuerpo = Object.fromEntries(EDITABLES.map((c) => [c, datos[c] === "" ? null : datos[c]]));
+      // Solo el piso/depto se puede vaciar (null); un obligatorio vacío viaja
+      // como "" y el backend lo marca en su campo.
+      const cuerpo = Object.fromEntries(
+        EDITABLES.map((c) => [c, c === "piso_depto" && datos[c] === "" ? null : datos[c]]),
+      );
       cargar(await api("/api/auth/perfil", { method: "PATCH", body: cuerpo }));
       setGuardado("Datos guardados.");
     } catch (err) {

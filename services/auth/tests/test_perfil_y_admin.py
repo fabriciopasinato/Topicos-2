@@ -1,10 +1,17 @@
 """8 Perfil y cambio de contrasenia; 9 administracion de cuentas."""
 
+import time
+from types import SimpleNamespace
+from typing import get_args
+
+import jwt
 import pytest
 from sqlalchemy import select, text
 
-from app import seguridad
-from app.models import Usuario
+from app import revocacion, seguridad
+from app.config import get_settings
+from app.models import ESTADOS, ROLES, Usuario
+from app.schemas import EstadoFiltro, RolFiltro
 from tests.conftest import DATOS_REGISTRO, login, token_del_email
 
 NUEVA = "jirafa-violeta-77"
@@ -58,6 +65,27 @@ def test_editar_con_dato_invalido_responde_422(client, cliente_activo, db_sessio
     assert r.status_code == 422
 
 
+def _perfil(db_session):
+    return db_session.execute(text("SELECT localidad, piso_depto FROM users")).one()
+
+
+@pytest.mark.parametrize("campo", ["nombre", "fecha_nacimiento", "localidad", "provincia", "codigo_postal"])
+def test_campo_obligatorio_en_null_responde_422_y_no_cambia_nada(client, cliente_activo, db_session, campo):
+    antes = _perfil(db_session)
+    r = client.patch("/auth/perfil", json={campo: None, "localidad": "Berisso"} if campo != "localidad"
+                     else {campo: None}, headers=_como(db_session))
+    assert r.status_code == 422
+    assert ["body", campo] in [e["loc"] for e in r.json()["detail"]]
+    assert _perfil(db_session) == antes
+
+
+def test_piso_depto_en_null_lo_vacia(client, cliente_activo, db_session):
+    db_session.execute(text("UPDATE users SET piso_depto = '3B'"))
+    r = client.patch("/auth/perfil", json={"piso_depto": None}, headers=_como(db_session))
+    assert r.status_code == 200 and r.json()["piso_depto"] is None
+    assert _perfil(db_session).localidad == "La Plata"
+
+
 def test_perfil_sin_identidad_responde_401(client):
     assert client.get("/auth/perfil").status_code == 401
 
@@ -81,9 +109,30 @@ def test_cambio_exitoso_revoca_lo_anterior_y_entrega_tokens_nuevos(client, clien
     assert redis_test.get(f"revocado:{user_id}") is not None
 
 
-def test_contrasenia_actual_incorrecta_responde_401(client, cliente_activo, db_session):
-    assert _cambiar(client, db_session, "no-es-la-actual", NUEVA).status_code == 401
+def test_token_nuevo_no_nace_revocado_aunque_el_commit_cruce_de_segundo(
+    client, cliente_activo, db_session, redis_test, monkeypatch
+):
+    # Simula que entre la firma del token y la publicacion pasaron varios
+    # segundos: el reloj que ve revocacion.publicar esta adelantado.
+    monkeypatch.setattr(revocacion, "time", SimpleNamespace(time=lambda: time.time() + 5))
+    r = _cambiar(client, db_session, DATOS_REGISTRO["password"], NUEVA)
+    assert r.status_code == 200
+
+    user_id = _como(db_session)["X-User-Id"]
+    marca = int(redis_test.get(f"revocado:{user_id}"))
+    iat = jwt.decode(r.json()["access_token"], get_settings().jwt_secret, algorithms=["HS256"])["iat"]
+    # Regla del gateway: se rechaza el token si iat < marca.
+    assert not iat < marca
+
+
+def test_contrasenia_actual_incorrecta_responde_422_en_el_campo_actual(client, cliente_activo, db_session, redis_test):
+    refresh = login(client).json()["refresh_token"]
+    r = _cambiar(client, db_session, "no-es-la-actual", NUEVA)
+    assert r.status_code == 422 and r.json()["detail"][0]["loc"] == ["body", "actual"]
+    # La contraseña no cambió y la sesión sigue: no hubo revocación.
     assert login(client).status_code == 200
+    assert client.post("/auth/refresh", json={"refresh_token": refresh}).status_code == 200
+    assert redis_test.get(f"revocado:{_como(db_session)['X-User-Id']}") is None
 
 
 def test_nueva_invalida_responde_422(client, cliente_activo, db_session):
@@ -128,6 +177,45 @@ def test_filtros_y_busqueda_por_dni_y_email(client, db_session):
     assert client.get("/auth/admin/usuarios", params={"rol": "event_owner"}, headers=ADMIN).json()["total"] == 0
 
 
+@pytest.mark.parametrize("params", [{"rol": "superusuario"}, {"estado": "cualquiera"}])
+def test_filtro_con_valor_inexistente_responde_422(client, params):
+    assert client.get("/auth/admin/usuarios", params=params, headers=ADMIN).status_code == 422
+
+
+def test_los_filtros_coinciden_con_roles_y_estados_del_modelo():
+    assert set(get_args(RolFiltro)) == set(ROLES)
+    assert set(get_args(EstadoFiltro)) == set(ESTADOS)
+
+
+def _insertar(db_session, email, apellido="X", dni=None):
+    db_session.execute(
+        text("INSERT INTO users (email, password_hash, rol, apellido, dni, estado) "
+             "VALUES (:e, 'h', 'cliente', :a, :d, 'activa')"),
+        {"e": email, "a": apellido, "d": dni},
+    )
+
+
+def _buscar(client, q):
+    return sorted(u["email"] for u in client.get("/auth/admin/usuarios", params={"q": q}, headers=ADMIN).json()["items"])
+
+
+def test_busqueda_trata_los_comodines_como_caracteres(client, db_session):
+    _insertar(db_session, "a_b@example.com")
+    _insertar(db_session, "axb@example.com")
+    _insertar(db_session, "cien%@example.com")
+    _insertar(db_session, "barra\\@example.com")
+    assert _buscar(client, "a_b") == ["a_b@example.com"]
+    assert _buscar(client, "%") == ["cien%@example.com"]
+    assert _buscar(client, "\\") == ["barra\\@example.com"]
+    assert _buscar(client, "_") == ["a_b@example.com"]
+
+
+def test_busqueda_por_apellido_sigue_ignorando_tildes(client, db_session):
+    _insertar(db_session, "p@example.com", apellido="Pérez_Gómez")
+    assert _buscar(client, "perez_gomez") == ["p@example.com"]
+    assert _buscar(client, "perez%gomez") == []
+
+
 def test_detalle_sin_hash_y_404(client, cliente_activo, db_session):
     user_id = _como(db_session)["X-User-Id"]
     r = client.get(f"/auth/admin/usuarios/{user_id}", headers=ADMIN)
@@ -159,7 +247,7 @@ def test_admin_restablece_bloquea_revoca_y_envia_email(client, cliente_activo, d
 
     fila = db_session.execute(text("SELECT estado, motivo_bloqueo FROM users WHERE id = :u"), {"u": user_id}).one()
     assert tuple(fila) == ("bloqueada", "restablecimiento_admin")
-    assert login(client).json()["codigo"] == "cuenta_bloqueada"
+    assert login(client).json()["codigo"] == "credenciales_invalidas"
     assert client.post("/auth/refresh", json={"refresh_token": refresh}).status_code == 401
     assert redis_test.get(f"revocado:{user_id}") is not None
 

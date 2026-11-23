@@ -9,10 +9,10 @@ from app.config import get_settings
 from app.correo import EnviadorEmail, get_enviador
 from app.db import get_session
 from app.identidad import Identidad, identidad_actual, requiere_rol
-from app.models import ESTADOS, ROL_ADMINISTRADOR, ROLES
+from app.models import ROL_ADMINISTRADOR
 from app.schemas import (
-    CambioContraseniaIn, CuentaAdminOut, EmailIn, EventOwnerIn, LoginIn, PaginaCuentas, PerfilOut, PerfilPatch,
-    RefreshIn, RegistroIn, RestablecerIn, TokenIn, TokensOut, UsuarioOut,
+    CambioContraseniaIn, CuentaAdminOut, EmailIn, EstadoFiltro, EventOwnerIn, LoginIn, PaginaCuentas, PerfilOut,
+    PerfilPatch, RefreshIn, RegistroIn, RestablecerIn, RolFiltro, TokenIn, TokensOut, UsuarioOut,
 )
 
 router = APIRouter(prefix="/auth")
@@ -36,8 +36,8 @@ class Ejecutor:
 
     def aplicar(self) -> None:
         ttl = get_settings().jwt_access_ttl_minutes * 60
-        for user_id in self.efectos.revocaciones:
-            revocacion.publicar(self.redis, user_id, ttl)
+        for user_id, instante in self.efectos.revocaciones:
+            revocacion.publicar(self.redis, user_id, ttl, instante)
         for email in self.efectos.emails:
             self.background.add_task(self.enviador.enviar, email)
 
@@ -108,10 +108,7 @@ def login(datos: LoginIn, session: Session = Depends(get_session), ejecutor: Eje
             content={"detail": "Email o contraseña incorrectos.", "codigo": "credenciales_invalidas"},
         )
     except servicio.CuentaNoActiva as e:
-        mensajes = {
-            "email_no_verificado": "Tenés que verificar tu email antes de ingresar.",
-            "cuenta_bloqueada": "Tu cuenta está bloqueada. Revisá tu email para restablecer la contraseña.",
-        }
+        mensajes = {"email_no_verificado": "Tenés que verificar tu email antes de ingresar."}
         return JSONResponse(status_code=403, content={"detail": mensajes[e.codigo], "codigo": e.codigo})
     return TokensOut(**vars(tokens))
 
@@ -169,7 +166,8 @@ def cambiar_contrasenia(datos: CambioContraseniaIn, session: Session = Depends(g
                 session, get_settings(), ejecutor.efectos, identidad.user_id, datos.actual, datos.nueva
             )
     except servicio.CredencialesInvalidas:
-        raise HTTPException(status_code=401, detail="La contraseña actual no es correcta.")
+        # 422 y no 401: el 401 queda para "sesion invalida", que el frontend renueva.
+        raise _error_campo("actual", ["La contraseña actual no es correcta."])
     ejecutor.aplicar()
     return TokensOut(**vars(tokens))
 
@@ -188,8 +186,8 @@ def crear_event_owner(datos: EventOwnerIn, session: Session = Depends(get_sessio
 @router.get("/admin/usuarios", response_model=PaginaCuentas)
 def listar_cuentas(
     q: str | None = Query(default=None, max_length=100),
-    rol: str | None = Query(default=None, enum=list(ROLES)),
-    estado: str | None = Query(default=None, enum=list(ESTADOS)),
+    rol: RolFiltro | None = Query(default=None),
+    estado: EstadoFiltro | None = Query(default=None),
     pagina: int = Query(default=1, ge=1),
     tamanio: int = Query(default=20, ge=1, le=100),
     session: Session = Depends(get_session),

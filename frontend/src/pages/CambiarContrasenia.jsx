@@ -30,11 +30,11 @@ export default function CambiarContrasenia() {
       setNueva("");
       setRepetida("");
     } catch (err) {
-      if (err.status === 401) setErrores({ actual: "La contraseña actual no es correcta." });
-      else {
-        setErrores(err.errores ?? {});
-        setError(mensajeDeError(err));
-      }
+      // Contraseña actual incorrecta = 422 con el error en "actual" (un 401
+      // sería sesión vencida, y de eso se ocupa el cliente de la API).
+      const porCampo = err.errores ?? {};
+      setErrores(porCampo);
+      if (!porCampo.actual && !porCampo.nueva) setError(mensajeDeError(err));
     }
   }
 

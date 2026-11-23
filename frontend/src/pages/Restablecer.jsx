@@ -3,12 +3,14 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, mensajeDeError } from "../api/client.js";
 import Campo from "../components/Campo.jsx";
 import Mensaje from "../components/Mensaje.jsx";
+import { useSesion } from "../auth/sesion.jsx";
 import { erroresContrasenia } from "../datos.js";
 
 export default function Restablecer() {
   const [params] = useSearchParams();
   const token = params.get("token") ?? "";
   const navigate = useNavigate();
+  const { logout } = useSesion();
   const [contrasenia, setContrasenia] = useState("");
   const [repetida, setRepetida] = useState("");
   const [errorServidor, setErrorServidor] = useState("");
@@ -24,6 +26,8 @@ export default function Restablecer() {
     setErrorServidor("");
     try {
       await api("/api/auth/restablecer-contrasenia", { method: "POST", body: { token, contrasenia } });
+      // El backend revocó todas las sesiones de la cuenta: la guardada ya no sirve.
+      logout();
       navigate("/login", { state: { aviso: "Contraseña actualizada. Ya podés ingresar." } });
     } catch (err) {
       if (err.status === 400) setVencido(true);
