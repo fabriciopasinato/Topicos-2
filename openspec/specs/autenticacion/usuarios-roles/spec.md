@@ -45,7 +45,7 @@ Las contraseñas SHALL guardarse solo como hash con un algoritmo lento y con sal
 - **THEN** el email contiene un link de un solo uso y nunca una contraseña
 
 ### Requirement: Login con emisión de tokens
-El servicio SHALL validar las credenciales y, solo si son correctas y la cuenta está `activa`, emitir un token de acceso JWT con identificador, rol, fecha de emisión y expiración, junto con un refresh token, y registrar el momento del login. Con contraseña correcta y cuenta no activa SHALL responder 403 con un código que indique el motivo.
+El servicio SHALL validar las credenciales y, solo si son correctas y la cuenta está `activa`, emitir un token de acceso JWT con identificador, rol, fecha de emisión y expiración, junto con un refresh token, y registrar el momento del login. Con contraseña correcta y cuenta `pendiente_verificacion` SHALL responder 403 con el código `email_no_verificado`. Una cuenta `bloqueada` SHALL recibir siempre el mismo 401 genérico que una credencial inválida, sea la contraseña correcta o no.
 
 #### Scenario: Login exitoso
 - **WHEN** un usuario con cuenta activa envía email y contraseña correctos
@@ -65,11 +65,16 @@ El servicio SHALL validar las credenciales y, solo si son correctas y la cuenta 
 
 #### Scenario: Cuenta bloqueada con contraseña correcta
 - **WHEN** un usuario con cuenta `bloqueada` envía email y contraseña correctos
-- **THEN** se responde 403 con código `cuenta_bloqueada` y no se emiten tokens
+- **THEN** se responde el mismo 401 genérico, con el mismo mensaje y código, que para cualquier credencial inválida, y no se emiten tokens
 
 #### Scenario: Cuenta bloqueada con contraseña incorrecta
 - **WHEN** se intenta loguear en una cuenta `bloqueada` con una contraseña incorrecta
 - **THEN** se responde el mismo 401 genérico que para cualquier credencial inválida, sin revelar el estado
+
+#### Scenario: Correcta e incorrecta indistinguibles en una cuenta bloqueada
+- **GIVEN** una cuenta `bloqueada`
+- **WHEN** se intenta el login una vez con la contraseña correcta y otra con una incorrecta
+- **THEN** las dos respuestas tienen el mismo status y el mismo cuerpo
 
 ### Requirement: Expiración configurable del token de acceso
 El token de acceso SHALL expirar a las 2 horas por defecto, con una duración configurable por variable de entorno.
@@ -178,17 +183,27 @@ La cuenta `pendiente_verificacion` SHALL pasar a `activa` al presentar el token 
 - **THEN** se responde el mismo 202 y no se envía ningún email
 
 ### Requirement: Bloqueo por intentos fallidos
-Al 5º intento consecutivo de login con contraseña incorrecta sobre una cuenta activa, la cuenta SHALL pasar a `bloqueada`, SHALL revocarse todas sus sesiones y SHALL enviarse un email con un link de restablecimiento. Un login exitoso SHALL reiniciar el contador.
+Al 5º intento consecutivo de login con contraseña incorrecta sobre una cuenta `activa` o `pendiente_verificacion`, la cuenta SHALL pasar a `bloqueada`, SHALL revocarse todas sus sesiones y SHALL enviarse un email con un link de restablecimiento. Un login con la contraseña correcta SHALL reiniciar el contador, aunque la cuenta esté pendiente de verificación y no se emitan tokens.
 
 #### Scenario: Quinto intento fallido
 - **GIVEN** una cuenta activa con 4 intentos fallidos consecutivos
 - **WHEN** se envía otra contraseña incorrecta
 - **THEN** la cuenta queda `bloqueada`, sus refresh tokens dejan de servir, sus tokens de acceso son rechazados y se envía un único email de restablecimiento
 
+#### Scenario: Quinto intento fallido en una cuenta sin verificar
+- **GIVEN** una cuenta en `pendiente_verificacion` con 4 intentos fallidos consecutivos
+- **WHEN** se envía otra contraseña incorrecta
+- **THEN** la cuenta queda `bloqueada` y se envía un único email de restablecimiento, cuyo uso deja la cuenta `activa`
+
 #### Scenario: Login exitoso reinicia el contador
 - **GIVEN** una cuenta activa con 3 intentos fallidos
 - **WHEN** el usuario se loguea con la contraseña correcta
 - **THEN** el contador vuelve a 0
+
+#### Scenario: Contraseña correcta en una cuenta sin verificar reinicia el contador
+- **GIVEN** una cuenta en `pendiente_verificacion` con 3 intentos fallidos
+- **WHEN** el usuario envía la contraseña correcta
+- **THEN** se responde 403 `email_no_verificado` y el contador vuelve a 0
 
 #### Scenario: Intentos fallidos concurrentes
 - **GIVEN** una cuenta activa con 3 intentos fallidos
@@ -229,7 +244,7 @@ Cualquier persona SHALL poder pedir el restablecimiento de la contraseña de un 
 - **THEN** solo uno cambia la contraseña y el otro recibe 400
 
 ### Requirement: Perfil del usuario
-Todo usuario autenticado SHALL poder ver sus datos y editar nombre, apellido, fecha de nacimiento, teléfono y dirección. Email, DNI, rol y estado SHALL NOT poder modificarse desde el perfil.
+Todo usuario autenticado SHALL poder ver sus datos y editar nombre, apellido, fecha de nacimiento, teléfono y dirección. Email, DNI, rol y estado SHALL NOT poder modificarse desde el perfil. Los campos obligatorios SHALL NOT poder vaciarse: solo `piso_depto` admite quedar sin valor.
 
 #### Scenario: Ver mi perfil
 - **WHEN** un usuario autenticado consulta su perfil
@@ -243,28 +258,50 @@ Todo usuario autenticado SHALL poder ver sus datos y editar nombre, apellido, fe
 - **WHEN** el usuario envía `rol`, `email` o `dni` en la edición
 - **THEN** esos campos se ignoran y no cambian
 
+#### Scenario: Campo obligatorio en null
+- **WHEN** el usuario envía `null` en un campo obligatorio, por ejemplo `{"localidad": null}`
+- **THEN** se responde 422 indicando el campo y ningún dato del perfil cambia
+
+#### Scenario: Vaciar el piso o departamento
+- **WHEN** el usuario envía `{"piso_depto": null}`
+- **THEN** el piso o departamento queda vacío y el resto del perfil no cambia
+
 ### Requirement: Cambio de contraseña
-Todo usuario autenticado SHALL poder cambiar su contraseña indicando la actual. El cambio SHALL revocar todas sus sesiones anteriores y entregar un par de tokens nuevo para la sesión actual.
+Todo usuario autenticado SHALL poder cambiar su contraseña indicando la actual. El cambio SHALL revocar todas sus sesiones anteriores y entregar un par de tokens nuevo para la sesión actual, que SHALL ser aceptado por el gateway en cuanto se recibe. Una contraseña actual incorrecta SHALL responder 422 con el error en el campo `actual`, para no confundirse con una sesión inválida (401).
 
 #### Scenario: Cambio exitoso
 - **WHEN** el usuario envía su contraseña actual correcta y una nueva válida
 - **THEN** la contraseña cambia, recibe tokens nuevos y sus tokens anteriores dejan de servir
 
+#### Scenario: El token nuevo sirve aunque el cambio cruce de segundo
+- **GIVEN** que el cambio de contraseña empieza en un segundo y termina en el siguiente
+- **WHEN** el usuario usa el token de acceso recibido en la respuesta
+- **THEN** el gateway lo acepta y la marca de revocación no es posterior a su `iat`
+
 #### Scenario: Contraseña actual incorrecta
 - **WHEN** el usuario envía una contraseña actual incorrecta
-- **THEN** se responde 401 y la contraseña no cambia
+- **THEN** se responde 422 con el error asociado al campo `actual`, la contraseña no cambia y la sesión sigue activa
 
 #### Scenario: Nueva contraseña inválida
 - **WHEN** la contraseña nueva no cumple la política
 - **THEN** se responde 422 y la contraseña no cambia
 
 ### Requirement: Administración de cuentas
-Un `administrador` SHALL poder listar las cuentas con búsqueda por email, apellido o DNI y filtros por rol y estado, de forma paginada, y ver el detalle de una cuenta. Otros roles SHALL recibir 403.
+Un `administrador` SHALL poder listar las cuentas con búsqueda por email, apellido o DNI y filtros por rol y estado, de forma paginada, y ver el detalle de una cuenta. Otros roles SHALL recibir 403. El texto de búsqueda SHALL compararse en forma literal, sin caracteres comodín, y un rol o estado inexistente en los filtros SHALL responder 422.
 
 #### Scenario: Búsqueda paginada
 - **GIVEN** 30 cuentas, 3 de ellas con apellido "Pérez"
 - **WHEN** el admin busca "pérez" con tamaño de página 20
 - **THEN** recibe esas 3 cuentas y el total de resultados
+
+#### Scenario: Búsqueda con caracteres comodín
+- **GIVEN** las cuentas `a_b@example.com` y `axb@example.com`
+- **WHEN** el admin busca `a_b`
+- **THEN** recibe solo `a_b@example.com`, y buscar `%` devuelve solo las cuentas que contienen ese carácter
+
+#### Scenario: Filtro con valor inexistente
+- **WHEN** el admin lista cuentas con `rol=superusuario` o `estado=cualquiera`
+- **THEN** se responde 422
 
 #### Scenario: Detalle de una cuenta
 - **WHEN** el admin consulta una cuenta
@@ -284,7 +321,7 @@ Un `administrador` SHALL poder restablecer la contraseña de un usuario puntual.
 #### Scenario: Login posterior con la contraseña vieja
 - **GIVEN** que el admin restableció la cuenta
 - **WHEN** el usuario intenta loguearse con su contraseña anterior
-- **THEN** se responde 403 con código `cuenta_bloqueada` y debe usar el link del email
+- **THEN** se responde el 401 genérico de credenciales inválidas y debe usar el link del email
 
 ### Requirement: Revocación inmediata de sesiones
 Al cambiar o restablecer la contraseña y al bloquearse una cuenta, el servicio SHALL invalidar todos los refresh tokens del usuario y SHALL publicar en Redis el instante de revocación, para que los tokens de acceso emitidos antes sean rechazados sin esperar su vencimiento.
@@ -312,3 +349,35 @@ Cada cuenta SHALL registrar cuándo se creó (`created_at`), cuándo cambió por
 #### Scenario: Renovar el token no cuenta como login
 - **WHEN** el usuario renueva su token con el refresh token
 - **THEN** `last_login_at` no cambia
+
+### Requirement: Sesión del usuario en el frontend
+El frontend SHALL renovar el token de acceso con el refresh token ante un 401 en cualquier ruta protegida, incluidas las de auth (perfil, administración y alta de event owners), y reintentar la solicitud una vez. Las rutas públicas de auth SHALL llamarse sin token de acceso, para que una sesión vencida o revocada no impida usarlas. Al completar un restablecimiento de contraseña, el frontend SHALL descartar la sesión guardada, porque el backend revoca todas las sesiones de la cuenta.
+
+#### Scenario: Token vencido en el perfil
+- **GIVEN** un usuario con el token de acceso vencido y un refresh token vigente
+- **WHEN** abre su perfil
+- **THEN** el frontend renueva el token, reintenta la consulta y muestra el perfil sin cerrar la sesión
+
+#### Scenario: Token vencido en la administración
+- **GIVEN** un administrador con el token de acceso vencido y un refresh token vigente
+- **WHEN** abre el listado de cuentas
+- **THEN** el frontend renueva el token y muestra el listado
+
+#### Scenario: Refresh rechazado
+- **GIVEN** un usuario cuyo refresh token ya no sirve
+- **WHEN** una ruta protegida responde 401
+- **THEN** el frontend cierra la sesión y lleva al login con el aviso de sesión cerrada
+
+#### Scenario: Restablecimiento con una sesión revocada en el navegador
+- **GIVEN** un navegador que conserva un token de acceso revocado
+- **WHEN** el usuario abre el link de restablecimiento y elige una contraseña nueva válida
+- **THEN** la solicitud se envía sin token, la contraseña cambia y no se intenta renovar la sesión
+
+#### Scenario: El restablecimiento cierra la sesión guardada
+- **GIVEN** un navegador con una sesión guardada
+- **WHEN** el usuario completa un restablecimiento de contraseña
+- **THEN** la sesión guardada se descarta y el frontend muestra el login sin las opciones de usuario autenticado
+
+#### Scenario: Login con credenciales inválidas
+- **WHEN** el login responde 401
+- **THEN** el frontend muestra el error de credenciales y no intenta renovar ningún token

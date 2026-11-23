@@ -43,7 +43,7 @@
   - Cambio de contraseña: la sesión sigue abierta.
   - Contraseña actual incorrecta: el error aparece en el campo.
   - Link de restablecimiento abierto en el mismo navegador después de un cambio de contraseña en otra pestaña: funciona.
-- [ ] 7.3 Responder en el PR #17 los 8 puntos de la review con el commit que corrige cada uno.
+- [x] 7.3 Responder en el PR #17 los 8 puntos de la review con el commit que corrige cada uno.
 
 ## Workflow follow-up
 

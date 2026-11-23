@@ -3,7 +3,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Login con emisión de tokens
-El servicio SHALL validar las credenciales y, solo si son correctas y la cuenta está `activa`, emitir un token de acceso JWT con identificador, rol, fecha de emisión y expiración, junto con un refresh token, y registrar el momento del login. Con contraseña correcta y cuenta `pendiente_verificacion` SHALL responder 403 con el código `email_no_verificado`. Una cuenta `bloqueada` SHALL recibir siempre el mismo 401 genérico que una credencial inválida, sea la contraseña correcta o no, para que el login no confirme contraseñas de cuentas bloqueadas.
+El servicio SHALL validar las credenciales y, solo si son correctas y la cuenta está `activa`, emitir un token de acceso JWT con identificador, rol, fecha de emisión y expiración, junto con un refresh token, y registrar el momento del login. Con contraseña correcta y cuenta `pendiente_verificacion` SHALL responder 403 con el código `email_no_verificado`. Una cuenta `bloqueada` SHALL recibir siempre el mismo 401 genérico que una credencial inválida, sea la contraseña correcta o no.
 
 #### Scenario: Login exitoso
 - **WHEN** un usuario con cuenta activa envía email y contraseña correctos
