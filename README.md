@@ -38,6 +38,16 @@ Con eso:
 
 `docker compose up -d` es idempotente: crea lo que falta (red, volúmenes, imágenes, contenedores) y reutiliza lo que ya existe. Los contenedores arrancan en orden según su estado de salud: `postgres` y `redis`, luego `auth`, `eventos` y `ventas`, luego `gateway` y `eventos-cron`, luego `frontend`. `eventos-cron` espera solo a `eventos` (que aplica las migraciones de su base), no a `ventas`. Si un servicio se cae, Docker lo reinicia solo.
 
+### Datos de demo
+
+Con el stack levantado:
+
+```bash
+python3 scripts/cargar_datos_demo.py
+```
+
+Carga por la API un event owner y un cliente de demo, 4 recintos y 9 eventos de todos los tipos y estados (publicados, con entradas vendidas, reprogramado, cancelado y borradores). Al final muestra el email y la contraseña de los dos usuarios de demo, para entrar con ellos al front. Son usuarios de prueba con contraseñas fijas, solo para el ambiente local. Va por el gateway y no por SQL para que los eventos publicados lleguen también a ventas. Se puede correr las veces que quieras: los eventos que ya existen se saltean. Para volver a la base vacía: `docker compose down -v`.
+
 ### eventos-cron
 
 Cuando un owner reprograma o cancela un evento publicado, eventos guarda la operación antes de avisarle a ventas (*transactional outbox*). Si ventas no responde, la operación queda pendiente y `eventos-cron` la reintenta sola, con espera creciente (5 s, 10 s, 20 s... hasta 60 s), hasta que ventas la confirme.
