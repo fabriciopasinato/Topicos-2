@@ -4,13 +4,15 @@ Uso: python3 scripts/cargar_datos_demo.py
 
 Va por la API y no por SQL para que cada evento publicado llegue también a ventas.
 Se puede correr varias veces: los eventos que ya existen (por nombre) se saltean.
+Si una corrida falla a mitad de camino, el evento que estaba armando queda incompleto
+y las siguientes lo saltean: para empezar de cero, `docker compose down -v`.
 """
 
 import json
 import os
-import re
 import subprocess
 import sys
+import time as reloj
 import urllib.error
 import urllib.request
 import uuid
@@ -18,7 +20,29 @@ from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote
 
-GATEWAY = os.environ.get("GATEWAY_URL", "http://localhost:8000")
+RAIZ = Path(__file__).resolve().parent.parent
+
+
+def _leer_env():
+    valores = {}
+    env = RAIZ / ".env"
+    if env.exists():
+        for linea in env.read_text(encoding="utf-8").splitlines():
+            linea = linea.strip().removeprefix("export ").strip()
+            if "=" in linea and not linea.startswith("#"):
+                clave, valor = linea.split("=", 1)
+                valores[clave.strip()] = valor.strip().strip("\"'")
+    return valores
+
+
+ENV = _leer_env()
+
+
+def configuracion(clave, por_defecto=None):
+    return os.environ.get(clave) or ENV.get(clave) or por_defecto
+
+
+GATEWAY = (configuracion("GATEWAY_URL") or f"http://localhost:{configuracion('GATEWAY_PORT', '8000')}").rstrip("/")
 OWNER = ("demo-owner@ticketera.local", "demo-owner-123")
 CLIENTE = ("demo-cliente@ticketera.local", "demo-cliente-123")
 PERFIL_CLIENTE = {
@@ -27,7 +51,6 @@ PERFIL_CLIENTE = {
     "provincia": "Buenos Aires", "codigo_postal": "1900",
 }
 ARGENTINA = timezone(timedelta(hours=-3))
-RAIZ = Path(__file__).resolve().parent.parent
 
 RECINTOS = [
     ("Estadio Central", "Av. del Libertador 7000"),
@@ -77,12 +100,25 @@ EVENTOS = [
 
 
 class ErrorApi(Exception):
-    def __init__(self, metodo, ruta, status, cuerpo):
+    def __init__(self, metodo, ruta, status, cuerpo, retry_after=None):
         super().__init__(f"{metodo} {ruta} -> {status}: {cuerpo}")
         self.status = status
+        self.retry_after = retry_after
 
 
 def pedir(metodo, ruta, cuerpo=None, token=None, headers=None):
+    try:
+        return _pedir(metodo, ruta, cuerpo, token, headers)
+    except ErrorApi as error:
+        if error.status != 429:
+            raise
+        espera = min(int(error.retry_after or 5), 60)
+        print(f"… rate limit del gateway: espero {espera} s y reintento")
+        reloj.sleep(espera)
+        return _pedir(metodo, ruta, cuerpo, token, headers)
+
+
+def _pedir(metodo, ruta, cuerpo, token, headers):
     datos = json.dumps(cuerpo).encode() if cuerpo is not None else None
     req = urllib.request.Request(f"{GATEWAY}{ruta}", data=datos, method=metodo)
     req.add_header("Content-Type", "application/json")
@@ -95,19 +131,11 @@ def pedir(metodo, ruta, cuerpo=None, token=None, headers=None):
             texto = resp.read().decode()
             return json.loads(texto) if texto else None
     except urllib.error.HTTPError as error:
-        raise ErrorApi(metodo, ruta, error.code, error.read().decode()) from None
+        raise ErrorApi(metodo, ruta, error.code, error.read().decode(), error.headers.get("Retry-After")) from None
 
 
 def credenciales_admin():
-    valores = {}
-    env = RAIZ / ".env"
-    if env.exists():
-        for linea in env.read_text().splitlines():
-            if "=" in linea and not linea.lstrip().startswith("#"):
-                clave, valor = linea.split("=", 1)
-                valores[clave.strip()] = valor.strip()
-    email = os.environ.get("ADMIN_EMAIL", valores.get("ADMIN_EMAIL"))
-    password = os.environ.get("ADMIN_PASSWORD", valores.get("ADMIN_PASSWORD"))
+    email, password = configuracion("ADMIN_EMAIL"), configuracion("ADMIN_PASSWORD")
     if not email or not password:
         sys.exit("Faltan ADMIN_EMAIL / ADMIN_PASSWORD (en el .env o como variables de entorno).")
     return email, password
@@ -125,21 +153,37 @@ def asegurar_usuario(ruta, credenciales, token=None, perfil=None):
             raise
 
 
+CONSULTA_MAILPIT = """
+import json, re, sys, urllib.parse, urllib.request
+base = "http://mailpit:8025/api/v1/"
+leer = lambda ruta: json.load(urllib.request.urlopen(base + ruta, timeout=5))
+for mensaje in leer("search?query=" + urllib.parse.quote("to:" + sys.argv[1]))["messages"]:
+    link = re.search(r"verificar\\S*[?&]token=([^\\s&]+)", leer("message/" + mensaje["ID"])["Text"])
+    if link:
+        print(link.group(1))
+        break
+"""
+
+
 def token_de_verificacion(email):
-    # Mailpit no publica puertos: se lo consulta desde el contenedor de auth, como indica el README.
-    consulta = (
-        "import json, urllib.request as u;"
-        f"m = json.load(u.urlopen('http://mailpit:8025/api/v1/search?query=to:{email}'))['messages'];"
-        "print(json.load(u.urlopen('http://mailpit:8025/api/v1/message/' + m[0]['ID']))['Text'] if m else '')"
-    )
-    texto = subprocess.run(
-        ["docker", "compose", "exec", "-T", "auth", "python", "-c", consulta],
-        cwd=RAIZ, capture_output=True, text=True, check=True,
-    ).stdout
-    encontrado = re.search(r"verificar\S*[?&]token=([^\s&]+)", texto)
-    if not encontrado:
-        raise RuntimeError(f"no hay email de verificación para {email} en mailpit")
-    return unquote(encontrado.group(1))
+    # Mailpit no publica puertos: se lo consulta desde adentro del contenedor de auth.
+    # Auth manda el email después de responder el registro, así que puede tardar unos segundos.
+    for _ in range(10):
+        try:
+            resultado = subprocess.run(
+                ["docker", "compose", "exec", "-T", "auth", "python", "-c", CONSULTA_MAILPIT, email],
+                cwd=RAIZ, capture_output=True, text=True, timeout=30,
+            )
+        except FileNotFoundError:
+            raise RuntimeError("no se encontró el comando docker para leer el email de verificación") from None
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("mailpit no respondió a tiempo") from None
+        if resultado.returncode != 0:
+            raise RuntimeError(f"no se pudo consultar mailpit: {resultado.stderr.strip()}")
+        if token := resultado.stdout.strip():
+            return unquote(token)
+        reloj.sleep(1)
+    raise RuntimeError(f"no llegó el email de verificación de {email} a mailpit")
 
 
 def login_verificando(email, password):
@@ -194,15 +238,17 @@ def comprar(evento_id, cliente):
 def main():
     try:
         admin = login(*credenciales_admin())
-    except (ErrorApi, urllib.error.URLError) as error:
-        sys.exit(f"No se pudo entrar como admin en {GATEWAY}. ¿Está levantado el stack? ({error})")
+    except urllib.error.URLError as error:
+        sys.exit(f"No se pudo conectar con el gateway en {GATEWAY}. ¿Está levantado el stack? ({error.reason})")
+    except ErrorApi as error:
+        sys.exit(f"No se pudo entrar como admin: {error}")
 
     asegurar_usuario("/api/auth/event-owners", OWNER, admin)
     owner = login(*OWNER)
     asegurar_usuario("/api/auth/registro", CLIENTE, perfil=PERFIL_CLIENTE)
     try:
         cliente = login_verificando(*CLIENTE)
-    except (ErrorApi, RuntimeError, subprocess.CalledProcessError) as error:
+    except (ErrorApi, RuntimeError) as error:
         cliente = None
         print(f"! El cliente demo no pudo iniciar sesión; se saltean las compras ({error})")
 
@@ -228,7 +274,10 @@ def main():
 
     print(f"\n{creados} eventos creados, {len(EVENTOS) - creados} ya existían.")
     print(f"Event owner demo: {OWNER[0]} / {OWNER[1]}")
-    print(f"Cliente demo:     {CLIENTE[0]} / {CLIENTE[1]}")
+    if cliente:
+        print(f"Cliente demo:     {CLIENTE[0]} / {CLIENTE[1]}")
+    else:
+        print("Cliente demo:     no disponible (no pudo iniciar sesión, ver el aviso de arriba)")
 
 
 if __name__ == "__main__":
