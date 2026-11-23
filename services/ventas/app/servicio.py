@@ -91,6 +91,10 @@ class EventoFinalizado(Exception):
     """El evento ya comenzo y no fue cancelado."""
 
 
+class TicketNoLiberable(Exception):
+    """El ticket ya no esta vendido bajo esa orden."""
+
+
 @dataclass(frozen=True)
 class PedidoReserva:
     evento_id: int
@@ -318,11 +322,20 @@ def obtener_reserva(session: Session, reserva_id: int, user_id: int) -> Reserva:
     return reserva
 
 
-def tickets_de_reserva(session: Session, reserva_id: int) -> list[Ticket]:
+def tickets_de_reserva(session: Session, reserva_id: int) -> list:
+    # Para reservas pagadas, orden_items conserva los tickets y precios originales
+    # aunque luego el ticket se devuelva (orden_id = NULL) o se revenda.
+    items = session.execute(
+        select(Ticket.id, Ticket.zona_id, Ticket.tipo_zona, Ticket.fila, Ticket.numero, OrdenItem.precio)
+        .join(OrdenItem, OrdenItem.ticket_id == Ticket.id)
+        .join(Orden, Orden.id == OrdenItem.orden_id)
+        .where(Orden.reserva_id == reserva_id)
+        .order_by(Ticket.id)
+    ).all()
+    if items:
+        return list(items)
     return list(session.scalars(
-        select(Ticket).where((Ticket.reserva_id == reserva_id) | (Ticket.orden_id.in_(
-            select(Orden.id).where(Orden.reserva_id == reserva_id)
-        ))).order_by(Ticket.id)
+        select(Ticket).where(Ticket.reserva_id == reserva_id).order_by(Ticket.id)
     ))
 
 
@@ -566,10 +579,6 @@ def solicitar_devolucion(session: Session, user_id: int, orden_item_id: int,
         session.rollback()
         raise EventoFinalizado()
 
-    if item.ticket_estado != "vendido" or item.ticket_orden_id != item.orden_id:
-        session.rollback()
-        raise DevolucionYaExiste()
-
     motivo_limpio = motivo.strip() if motivo is not None else None
     if motivo_limpio == "":
         motivo_limpio = None
@@ -598,6 +607,10 @@ def solicitar_devolucion(session: Session, user_id: int, orden_item_id: int,
     if creada_id is None:
         session.rollback()
         raise DevolucionYaExiste()
+
+    if item.ticket_estado != "vendido" or item.ticket_orden_id != item.orden_id:
+        session.rollback()
+        raise NoEncontrado()
 
     session.commit()
     return _detalle_devolucion(session, creada_id)
@@ -669,7 +682,7 @@ def aprobar_devolucion(session: Session, devolucion_id: int, admin_id: int,
     ).first()
     if liberado is None:
         session.rollback()
-        raise DevolucionYaResuelta()
+        raise TicketNoLiberable()
 
     session.commit()
     return _detalle_devolucion(session, devolucion_id)

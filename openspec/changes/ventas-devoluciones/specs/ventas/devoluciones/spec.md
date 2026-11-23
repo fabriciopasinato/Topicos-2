@@ -39,8 +39,8 @@ Un usuario autenticado con rol `cliente` SHALL poder solicitar la devolución de
 - **THEN** se responde 404 y no se crea ninguna solicitud
 
 #### Scenario: Solicitud sobre ticket inexistente o no vendido en esa orden
-- **WHEN** un cliente solicita la devolución de un ítem inexistente
-- **THEN** se responde 404
+- **WHEN** un cliente solicita la devolución de un ítem inexistente o de un ítem sin devolución activa cuyo ticket ya no está vendido en esa orden
+- **THEN** se responde 404 y no se crea ninguna solicitud
 
 #### Scenario: Solicitud duplicada sobre un ítem con devolución pendiente o aprobada
 - **GIVEN** que el ítem ya tiene una solicitud de devolución en estado `pendiente` o `aprobada`

@@ -134,6 +134,8 @@ def _errores():
         raise HTTPException(status_code=409, detail="la devolucion ya fue resuelta")
     except servicio.EventoFinalizado:
         raise HTTPException(status_code=409, detail="el evento ya comenzo")
+    except servicio.TicketNoLiberable:
+        raise HTTPException(status_code=409, detail="el ticket ya no esta vendido en esa orden")
 
 
 def _reserva_out(session: Session, reserva) -> ReservaOut:

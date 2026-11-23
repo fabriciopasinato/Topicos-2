@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, mensajeDeError } from "../api/client.js";
 import Mensaje from "../components/Mensaje.jsx";
 import { formatearFecha } from "./Cartelera.jsx";
@@ -9,24 +9,46 @@ export default function AdminDevoluciones() {
   const [notas, setNotas] = useState({});
   const [error, setError] = useState("");
   const [aviso, setAviso] = useState("");
-  const [procesando, setProcesando] = useState(null);
+  const [procesando, setProcesando] = useState(() => new Set());
 
-  const cargar = useCallback(async () => {
-    setError("");
-    try {
-      const qs = estado ? `?estado=${encodeURIComponent(estado)}` : "";
-      setDevoluciones(await api(`/api/ventas/devoluciones${qs}`));
-    } catch (e) {
-      setError(mensajeDeError(e));
-    }
-  }, [estado]);
+  const estadoRef = useRef(estado);
+  estadoRef.current = estado;
+  const reqIdRef = useRef(0);
+  const montadoRef = useRef(true);
+  const enCursoRef = useRef(new Set());
 
   useEffect(() => {
-    cargar();
-  }, [cargar]);
+    montadoRef.current = true;
+    return () => {
+      montadoRef.current = false;
+    };
+  }, []);
+
+  const cargar = useCallback(async (filtro) => {
+    const estadoActual = filtro !== undefined ? filtro : estadoRef.current;
+    const reqId = ++reqIdRef.current;
+    setError("");
+    try {
+      const qs = estadoActual ? `?estado=${encodeURIComponent(estadoActual)}` : "";
+      const datos = await api(`/api/ventas/devoluciones${qs}`);
+      if (montadoRef.current && reqId === reqIdRef.current) {
+        setDevoluciones(datos);
+      }
+    } catch (e) {
+      if (montadoRef.current && reqId === reqIdRef.current) {
+        setError(mensajeDeError(e));
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    cargar(estado);
+  }, [estado, cargar]);
 
   async function resolver(id, accion) {
-    setProcesando(id);
+    if (enCursoRef.current.has(id)) return;
+    enCursoRef.current.add(id);
+    setProcesando(new Set(enCursoRef.current));
     setError("");
     setAviso("");
     try {
@@ -35,6 +57,7 @@ export default function AdminDevoluciones() {
         method: "POST",
         body: { nota },
       });
+      if (!montadoRef.current) return;
       setNotas((prev) => {
         const copia = { ...prev };
         delete copia[id];
@@ -43,9 +66,14 @@ export default function AdminDevoluciones() {
       setAviso(accion === "aprobar" ? `Devolución #${id} aprobada.` : `Devolución #${id} rechazada.`);
       await cargar();
     } catch (e) {
-      setError(mensajeDeError(e));
+      if (montadoRef.current) {
+        setError(mensajeDeError(e));
+      }
     } finally {
-      setProcesando(null);
+      enCursoRef.current.delete(id);
+      if (montadoRef.current) {
+        setProcesando(new Set(enCursoRef.current));
+      }
     }
   }
 
@@ -100,14 +128,14 @@ export default function AdminDevoluciones() {
                   </label>
                   <button
                     type="button"
-                    disabled={procesando === d.id}
+                    disabled={procesando.has(d.id)}
                     onClick={() => resolver(d.id, "aprobar")}
                   >
                     Aprobar
                   </button>
                   <button
                     type="button"
-                    disabled={procesando === d.id}
+                    disabled={procesando.has(d.id)}
                     onClick={() => resolver(d.id, "rechazar")}
                   >
                     Rechazar

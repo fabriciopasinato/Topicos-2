@@ -23,18 +23,19 @@ Actualmente `services/ventas` modela el inventario con un registro en `tickets` 
 
 ## Decisions
 
-### 1. Vincular devoluciones a `orden_item_id` (y no solo a `ticket_id`)
-- **Decisión**: la tabla `devoluciones` referencia `orden_item_id` (FK a `orden_items.id`), además de almacenar `orden_id`, `ticket_id` y `user_id`.
-- **Motivo**: un ticket devuelto vuelve a quedar `disponible` y puede comprarse nuevamente en otra orden, generando un nuevo `orden_items.id`. Vincular la devolución al `orden_item_id` permite conservar intacto el historial de cada venta y distinguir la compra original de reventas posteriores sin reutilizar ni pisar registros.
-- **Alternativa descartada**: referenciar solo `ticket_id` con unique constraint sobre `ticket_id`, lo que impediría devolver un asiento que ya fue devuelto y revendido previamente.
+### 1. Vincular devoluciones a `orden_item_id` y preservar reservas pagadas desde `orden_items`
+- **Decisión**: la tabla `devoluciones` referencia `orden_item_id` (FK a `orden_items.id`), además de almacenar `orden_id`, `ticket_id` y `user_id`. Asimismo, `tickets_de_reserva` (usado por `GET /ventas/reservas/{id}`) consulta primero `orden_items JOIN ordenes JOIN tickets` (tomando `OrdenItem.precio`) cuando la reserva ya tiene orden, y solo recurre a `tickets.reserva_id` para reservas no pagadas.
+- **Motivo**: un ticket devuelto vuelve a quedar `disponible` (con `reserva_id = NULL` y `orden_id = NULL`) y puede comprarse nuevamente en otra orden, generando un nuevo `orden_items.id`. Apoyar tanto `compras_de` como `tickets_de_reserva` en `orden_items` preserva intactos los tickets y el total de la reserva/orden original sin perder detalle tras devoluciones o reventas.
+- **Alternativa descartada**: referenciar solo `ticket_id` con unique constraint sobre `ticket_id`, lo que impediría devolver un asiento revendido, o seguir leyendo reservas pagadas vía `tickets.reserva_id`/`tickets.orden_id`, lo que haría desaparecer los tickets devueltos de `GET /ventas/reservas/{id}`.
 
 ### 2. Unicidad parcial en PostgreSQL para evitar solicitudes duplicadas bajo concurrencia
-- **Decisión**: crear el índice único parcial `uq_devoluciones_item_activa` sobre `devoluciones (orden_item_id) WHERE estado IN ('pendiente', 'aprobada')`.
+- **Decisión**: crear el índice único parcial `uq_devoluciones_item_activa` sobre `devoluciones (orden_item_id) WHERE estado IN ('pendiente', 'aprobada')`. En `solicitar_devolucion`, el `INSERT ... ON CONFLICT DO NOTHING` se ejecuta antes de verificar `ticket_estado`/`ticket_orden_id`; si el `INSERT` pasó pero el ticket ya no estaba vendido bajo esa orden, se hace `rollback` y se responde `404` (`NoEncontrado`).
 - **Motivo**:
   - Impide a nivel de base de datos que dos solicitudes concurrentes del cliente generen dos devoluciones pendientes para el mismo ítem.
-  - Impide solicitar una nueva devolución sobre un ítem cuya devolución ya fue aprobada.
+  - Impide solicitar una nueva devolución sobre un ítem cuya devolución ya fue aprobada (devolviendo `409` en lugar de `404` aunque el ticket haya vuelto a `disponible`).
+  - Permite distinguir ese `409` del caso de un ítem sin devolución activa cuyo ticket no está vendido en esa orden (`404`).
   - Permite que, si una solicitud fue `rechazada`, el cliente pueda enviar una nueva solicitud mientras se conserva el registro de la rechazada.
-- **Alternativa descartada**: validar solo con un `SELECT` previo en Python (susceptible a race conditions bajo peticiones simultáneas).
+- **Alternativa descartada**: validar solo con un `SELECT` previo en Python (susceptible a race conditions) o rechazar `ticket_estado != 'vendido'` antes del `INSERT` (lo que devolvería `404` en lugar de `409` cuando la devolución ya fue aprobada).
 
 ### 3. Esquema de la tabla `devoluciones` (migración Alembic `0003_devoluciones`)
 Revisión `0003` con `down_revision = "0002"` (encadenada tras `0002_estado_del_evento.py`).
@@ -70,7 +71,7 @@ Columnas:
   1. `UPDATE devoluciones SET estado = 'aprobada', resuelto_por = :admin_id, nota_resolucion = :nota, resuelto_at = now() WHERE id = :id AND estado = 'pendiente' RETURNING id, ticket_id, orden_id`.
   2. Si no devuelve fila: verificar existencia (`404` si no existe, `409` si ya estaba resuelta).
   3. `UPDATE tickets SET estado = 'disponible', reserva_id = NULL, reservado_hasta = NULL, orden_id = NULL WHERE id = :ticket_id AND orden_id = :orden_id AND estado = 'vendido' RETURNING id`.
-  4. Si el ticket no se actualizó (defensivo), hacer `rollback` y responder `409`.
+  4. Si el ticket no se actualizó (defensivo), hacer `rollback` (la solicitud sigue `pendiente`) y responder `409` con una excepción dedicada (`TicketNoLiberable`: `"el ticket ya no esta vendido en esa orden"`), sin reportar `DevolucionYaResuelta`.
   5. `commit`.
 - **Rechazar**:
   1. `UPDATE devoluciones SET estado = 'rechazada', resuelto_por = :admin_id, nota_resolucion = :nota, resuelto_at = now() WHERE id = :id AND estado = 'pendiente' RETURNING id`.

@@ -20,6 +20,7 @@ Actualmente el servicio de `ventas` soporta el ciclo completo de compra para amb
   - La resolución concurrente (dos administradores aprobando/rechazando al mismo tiempo) es segura mediante actualización condicional atómica.
 - **Historial de compras, disponibilidad y trazabilidad (`services/ventas`)**:
   - `GET /ventas/compras` sigue mostrando las órdenes del cliente (incluso si alguno o todos sus tickets fueron devueltos), informa para cada ticket su estado de devolución (`pendiente`, `aprobada`, `rechazada`) y expone el estado local del evento (`evento_fecha_inicio`, `evento_cancelado`, `evento_estado`), preservando `orden_items` como registro histórico inmutable de la compra.
+  - `GET /ventas/reservas/{id}` sobre una reserva pagada también resuelve sus tickets y precios desde `orden_items`, conservando el detalle y total originales aun tras devoluciones aprobadas o reventas.
   - `orden_items` vincula la devolución con la compra concreta (`orden_item_id`) para soportar correctamente que un mismo ticket liberado vuelva a venderse en el futuro en otra orden.
   - `GET /ventas/eventos/{evento_id}/disponibilidad` agrega el campo informativo `a_la_venta` (`bool`) calculado desde `inventario_eventos`.
 - **Migración de base de datos (`services/ventas`)**:
@@ -37,7 +38,7 @@ Actualmente el servicio de `ventas` soporta el ciclo completo de compra para amb
 - `ventas/devoluciones`: flujo completo de solicitud de devolución por ticket individual por clientes (respetando eventos cancelados vs. finalizados) y aprobación/rechazo por administradores con liberación atómica del asiento numerado o cupo de zona general y control de concurrencia.
 
 ### Modified Capabilities
-- `ventas/compra-concurrencia`: `GET /ventas/eventos/{evento_id}/disponibilidad` informa `a_la_venta` y contempla tickets liberados por devolución aprobada; el historial propio (`GET /ventas/compras`) expone el estado de devolución de cada ticket adquirido y el estado local del evento (`evento_fecha_inicio`, `evento_cancelado`, `evento_estado`).
+- `ventas/compra-concurrencia`: `GET /ventas/eventos/{evento_id}/disponibilidad` informa `a_la_venta` y contempla tickets liberados por devolución aprobada; el historial propio (`GET /ventas/compras`) expone el estado de devolución de cada ticket adquirido y el estado local del evento (`evento_fecha_inicio`, `evento_cancelado`, `evento_estado`); y `GET /ventas/reservas/{id}` conserva los tickets y total de reservas pagadas tras devoluciones aprobadas.
 
 ## Impact
 

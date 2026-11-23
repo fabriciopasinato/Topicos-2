@@ -31,7 +31,7 @@ Ventas SHALL informar, para un evento publicado, si el evento está `a_la_venta`
 - **THEN** la respuesta informa `a_la_venta: false` junto con las zonas del inventario
 
 ### Requirement: Operaciones solo para clientes autenticados
-Solo un usuario autenticado con rol `cliente` SHALL poder reservar, pagar y cancelar, y cada reserva y orden SHALL quedar asociada a ese usuario. Al consultar su historial propio, el cliente SHALL recibir todas sus órdenes pagadas con los tickets comprados, su modalidad, el precio pagado, el estado local del evento (`evento_fecha_inicio`, `evento_cancelado`, `evento_estado`) y el estado de la última devolución asociada a cada ítem (si existe), manteniendo el registro histórico incluso cuando el ticket haya sido devuelto.
+Solo un usuario autenticado con rol `cliente` SHALL poder reservar, pagar y cancelar, y cada reserva y orden SHALL quedar asociada a ese usuario. Su historial de compras y el detalle de reservas pagadas SHALL conservar sus tickets y precios pagados aun tras devoluciones aprobadas o reventas, incluyendo modalidad, estado local del evento (`evento_fecha_inicio`, `evento_cancelado`, `evento_estado`) y última devolución de cada ítem.
 
 #### Scenario: Reserva sin autenticación
 - **WHEN** se intenta reservar sin token
@@ -50,3 +50,8 @@ Solo un usuario autenticado con rol `cliente` SHALL poder reservar, pagar y canc
 - **GIVEN** que un evento de una orden pagada fue cancelado o reprogramado en `ventas`
 - **WHEN** el cliente consulta sus compras
 - **THEN** el ticket refleja la `evento_fecha_inicio` actualizada, `evento_cancelado` y `evento_estado` (`cancelado`, `finalizado` o `activo`) sin consultar al servicio `eventos`
+
+#### Scenario: Reserva pagada conserva tickets y total tras devolución aprobada
+- **GIVEN** una reserva pagada de A-1 y A-2 con total 3000
+- **WHEN** un administrador aprueba la devolución de A-1 (o de ambos asientos, incluso tras una reventa) y el cliente consulta la reserva
+- **THEN** la reserva sigue figurando `pagada` con ambos tickets y total 3000

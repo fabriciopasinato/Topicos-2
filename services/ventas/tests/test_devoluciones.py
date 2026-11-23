@@ -236,3 +236,65 @@ def test_rechazar_deja_ticket_vendido_y_no_permite_re_resolver(c):
     assert c.post(f"/ventas/devoluciones/{dev['id']}/rechazar", headers=ADMIN).status_code == 409
     assert c.post("/ventas/devoluciones/99999/aprobar", headers=ADMIN).status_code == 404
     assert c.post("/ventas/devoluciones/99999/rechazar", headers=ADMIN).status_code == 404
+
+
+def test_reserva_pagada_conserva_tickets_y_total_tras_devoluciones_y_reventa(c):
+    orden = _comprar(c, asientos=["A-1", "A-2"], headers=CLIENTE)
+    reserva_id = orden["reserva_id"]
+    items = {f"{t['fila']}-{t['numero']}": t["orden_item_id"] for t in orden["tickets"]}
+
+    dev_1 = c.post("/ventas/devoluciones", json={"orden_item_id": items["A-1"]}, headers=CLIENTE).json()
+    assert c.post(f"/ventas/devoluciones/{dev_1['id']}/aprobar", headers=ADMIN).status_code == 200
+
+    res_parcial = c.get(f"/ventas/reservas/{reserva_id}", headers=CLIENTE)
+    assert res_parcial.status_code == 200
+    datos_parcial = res_parcial.json()
+    assert datos_parcial["estado"] == "pagada"
+    assert datos_parcial["total"] == 3000.0
+    assert {(t["fila"], t["numero"], t["precio"]) for t in datos_parcial["tickets"]} == {
+        ("A", 1, 1500.0),
+        ("A", 2, 1500.0),
+    }
+
+    # Se revende A-1 a otro cliente y se devuelve tambien A-2: la reserva original sigue intacta.
+    _comprar(c, asientos=["A-1"], headers=OTRO_CLIENTE)
+    dev_2 = c.post("/ventas/devoluciones", json={"orden_item_id": items["A-2"]}, headers=CLIENTE).json()
+    assert c.post(f"/ventas/devoluciones/{dev_2['id']}/aprobar", headers=ADMIN).status_code == 200
+
+    res_total = c.get(f"/ventas/reservas/{reserva_id}", headers=CLIENTE)
+    assert res_total.status_code == 200
+    datos_total = res_total.json()
+    assert datos_total["estado"] == "pagada"
+    assert datos_total["total"] == 3000.0
+    assert {(t["fila"], t["numero"]) for t in datos_total["tickets"]} == {("A", 1), ("A", 2)}
+
+
+def test_solicitud_sobre_ticket_no_vendido_en_orden_sin_devolucion_responde_404(c, db_session):
+    orden = _comprar(c, asientos=["A-1"], headers=CLIENTE)
+    ticket_id = orden["tickets"][0]["ticket_id"]
+    item_id = orden["tickets"][0]["orden_item_id"]
+    db_session.execute(
+        text("UPDATE tickets SET estado = 'disponible', orden_id = NULL WHERE id = :t"),
+        {"t": ticket_id},
+    )
+
+    r = c.post("/ventas/devoluciones", json={"orden_item_id": item_id}, headers=CLIENTE)
+    assert r.status_code == 404
+    assert db_session.scalar(text("SELECT count(*) FROM devoluciones")) == 0
+
+
+def test_aprobar_con_ticket_inconsistente_responde_409_especifico_y_deja_pendiente(c, db_session):
+    orden = _comprar(c, asientos=["A-1"], headers=CLIENTE)
+    ticket_id = orden["tickets"][0]["ticket_id"]
+    item_id = orden["tickets"][0]["orden_item_id"]
+    dev_id = c.post("/ventas/devoluciones", json={"orden_item_id": item_id}, headers=CLIENTE).json()["id"]
+
+    db_session.execute(
+        text("UPDATE tickets SET estado = 'disponible', orden_id = NULL WHERE id = :t"),
+        {"t": ticket_id},
+    )
+
+    r = c.post(f"/ventas/devoluciones/{dev_id}/aprobar", headers=ADMIN)
+    assert r.status_code == 409
+    assert "no esta vendido" in r.json()["detail"]
+    assert db_session.scalar(text("SELECT estado FROM devoluciones WHERE id = :d"), {"d": dev_id}) == "pendiente"

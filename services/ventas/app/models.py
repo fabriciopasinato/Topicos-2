@@ -138,7 +138,7 @@ class Devolucion(Base):
     orden_id: Mapped[int] = mapped_column(ForeignKey("ordenes.id"), index=True)
     ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id"), index=True)
     user_id: Mapped[int] = mapped_column(Integer, index=True)
-    estado: Mapped[str] = mapped_column(String(20), default=DEVOLUCION_PENDIENTE)
+    estado: Mapped[str] = mapped_column(String(20), default=DEVOLUCION_PENDIENTE, server_default=DEVOLUCION_PENDIENTE)
     motivo: Mapped[str | None] = mapped_column(String(500))
     nota_resolucion: Mapped[str | None] = mapped_column(String(500))
     resuelto_por: Mapped[int | None] = mapped_column(Integer)
