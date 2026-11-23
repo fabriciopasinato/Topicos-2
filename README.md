@@ -47,7 +47,7 @@ Con el stack levantado:
 python3 scripts/cargar_datos_demo.py
 ```
 
-Carga por la API un event owner y un cliente de demo, 4 recintos y 9 eventos de todos los tipos y estados (publicados, con entradas vendidas, reprogramado, cancelado y borradores). Al final muestra el email y la contraseña de los dos usuarios de demo, para entrar con ellos al front. Son usuarios de prueba con contraseñas fijas, solo para el ambiente local. Va por el gateway y no por SQL para que los eventos publicados lleguen también a ventas. Se puede correr las veces que quieras: los eventos que ya existen se saltean. Si una corrida falla a mitad de camino, el evento que estaba armando queda incompleto y las siguientes lo saltean; en ese caso, empezá de cero con `docker compose down -v` (borra las bases).
+Carga por la API un event owner y un cliente de demo, 4 recintos y 9 eventos de todos los tipos y estados (publicados, con entradas vendidas, reprogramado, cancelado y borradores). En el evento cancelado deja una devolución pendiente, una aprobada y una rechazada, para ver "Mis compras" y `/admin/devoluciones` con datos. Al final muestra el email y la contraseña de los dos usuarios de demo, para entrar con ellos al front. Son usuarios de prueba con contraseñas fijas, solo para el ambiente local. Va por el gateway y no por SQL para que los eventos publicados lleguen también a ventas. Se puede correr las veces que quieras: los eventos que ya existen se saltean. Si una corrida falla a mitad de camino, el evento que estaba armando queda incompleto y las siguientes lo saltean; en ese caso, empezá de cero con `docker compose down -v` (borra las bases).
 
 ### eventos-cron
 

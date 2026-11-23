@@ -91,7 +91,8 @@ EVENTOS = [
     {"nombre": "Stand-up de Fin de Año", "tipo": "otro", "recinto": "Teatro del Sur", "dias": 25,
      "organizador": "Risas SRL", "participantes": ["Laura Gil"], "zonas": SALA, "final": "reprogramado"},
     {"nombre": "Dúo Aurora en vivo", "tipo": "recital", "recinto": "Teatro del Sur", "dias": 15,
-     "organizador": "Compañía Telón Rojo", "participantes": ["Dúo Aurora"], "zonas": SALA, "final": "cancelado"},
+     "organizador": "Compañía Telón Rojo", "participantes": ["Dúo Aurora"], "zonas": SALA, "final": "cancelado",
+     "compras": True, "devoluciones": True},
     {"nombre": "Noche de Jazz (en preparación)", "tipo": "recital", "recinto": "Centro de Convenciones Ribera",
      "dias": 60, "organizador": "Comunidad Dev Ribera", "participantes": [], "zonas": SOLO_GENERAL, "final": "borrador"},
     {"nombre": "Obra sin título (borrador)", "tipo": "teatro", "recinto": "Teatro del Sur", "dias": 70,
@@ -235,6 +236,19 @@ def comprar(evento_id, cliente):
     pedir("POST", f"/api/ventas/reservas/{reserva['id']}/pago", token=cliente)
 
 
+def pedir_devoluciones(evento_id, cliente, admin):
+    """Deja una devolución en cada estado (pendiente, aprobada, rechazada) y un ticket sin pedir."""
+    items = [t["orden_item_id"] for orden in pedir("GET", "/api/ventas/compras", token=cliente)
+             for t in orden["tickets"] if t["evento_id"] == evento_id]
+    _pendiente, aprobada, rechazada = (
+        pedir("POST", "/api/ventas/devoluciones", {"orden_item_id": item, "motivo": "El evento se canceló"}, cliente)
+        for item in items[:3]
+    )
+    pedir("POST", f"/api/ventas/devoluciones/{aprobada['id']}/aprobar", {"nota": "Reintegro aprobado"}, admin)
+    pedir("POST", f"/api/ventas/devoluciones/{rechazada['id']}/rechazar",
+          {"nota": "Solicitud duplicada, ya se reintegró por otro medio"}, admin)
+
+
 def main():
     try:
         admin = login(*credenciales_admin())
@@ -269,6 +283,8 @@ def main():
             pedir("POST", f"/api/eventos/{evento_id}/reprogramar", {"fecha": fecha_en(spec["dias"] + 14)}, owner)
         elif spec["final"] == "cancelado":
             pedir("POST", f"/api/eventos/{evento_id}/cancelar", token=owner)
+        if spec.get("devoluciones") and cliente:
+            pedir_devoluciones(evento_id, cliente, admin)
         creados += 1
         print(f"+ {spec['nombre']} ({spec['final']})")
 
