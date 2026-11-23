@@ -36,11 +36,19 @@ export default function Perfil() {
     setError("");
     setErrores({});
     try {
-      // Solo el piso/depto se puede vaciar (null); un obligatorio vacío viaja
-      // como "" y el backend lo marca en su campo.
+      // Solo viaja lo que el usuario cambió: un perfil incompleto (owner o
+      // admin) se completa de a un campo. Vaciar el piso/depto manda null; un
+      // obligatorio que se borra viaja como "" y el backend lo marca en su campo.
       const cuerpo = Object.fromEntries(
-        EDITABLES.map((c) => [c, c === "piso_depto" && datos[c] === "" ? null : datos[c]]),
+        EDITABLES.filter((c) => datos[c] !== (perfil[c] ?? "")).map((c) => [
+          c,
+          c === "piso_depto" && datos[c] === "" ? null : datos[c],
+        ]),
       );
+      if (Object.keys(cuerpo).length === 0) {
+        setGuardado("No hay cambios para guardar.");
+        return;
+      }
       cargar(await api("/api/auth/perfil", { method: "PATCH", body: cuerpo }));
       setGuardado("Datos guardados.");
     } catch (err) {

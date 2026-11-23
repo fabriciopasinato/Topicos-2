@@ -266,6 +266,11 @@ Todo usuario autenticado SHALL poder ver sus datos y editar nombre, apellido, fe
 - **WHEN** el usuario envía `{"piso_depto": null}`
 - **THEN** el piso o departamento queda vacío y el resto del perfil no cambia
 
+#### Scenario: Completar un perfil incompleto de a un campo
+- **GIVEN** un event owner o un administrador creado sin datos de perfil
+- **WHEN** completa solo su teléfono y guarda desde el frontend
+- **THEN** el teléfono se guarda y los demás datos siguen vacíos, sin errores por los campos que no tocó
+
 ### Requirement: Cambio de contraseña
 Todo usuario autenticado SHALL poder cambiar su contraseña indicando la actual. El cambio SHALL revocar todas sus sesiones anteriores y entregar un par de tokens nuevo para la sesión actual, que SHALL ser aceptado por el gateway en cuanto se recibe. Una contraseña actual incorrecta SHALL responder 422 con el error en el campo `actual`, para no confundirse con una sesión inválida (401).
 
@@ -381,3 +386,21 @@ El frontend SHALL renovar el token de acceso con el refresh token ante un 401 en
 #### Scenario: Login con credenciales inválidas
 - **WHEN** el login responde 401
 - **THEN** el frontend muestra el error de credenciales y no intenta renovar ningún token
+
+### Requirement: Lecturas públicas con la sesión revocada
+Si una lectura pública (cartelera, detalle de un evento, tipos, recintos o disponibilidad) responde 401 y la renovación del token también falla, el frontend SHALL descartar la sesión y repetir la lectura sin token, sin redirigir al login. Las rutas que requieren sesión SHALL mantener la redirección al login con el aviso de sesión cerrada.
+
+#### Scenario: Cartelera con la sesión revocada
+- **GIVEN** un navegador con una sesión revocada, cuyo refresh token tampoco sirve
+- **WHEN** el usuario abre la cartelera
+- **THEN** la sesión se descarta, la cartelera se muestra y el encabezado ofrece ingresar
+
+#### Scenario: Detalle de un evento con la sesión revocada
+- **GIVEN** un navegador con una sesión revocada
+- **WHEN** el usuario abre el detalle de un evento publicado
+- **THEN** ve el evento y su disponibilidad sin ser llevado al login
+
+#### Scenario: Mis eventos con la sesión revocada
+- **GIVEN** un event owner con la sesión revocada
+- **WHEN** abre "Mis eventos"
+- **THEN** la sesión se cierra y el frontend lo lleva al login con el aviso de sesión cerrada

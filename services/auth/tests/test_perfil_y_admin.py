@@ -86,6 +86,19 @@ def test_piso_depto_en_null_lo_vacia(client, cliente_activo, db_session):
     assert _perfil(db_session).localidad == "La Plata"
 
 
+def test_owner_sin_perfil_completa_solo_el_telefono(client):
+    owner = {"email": "owner@example.com", "password": "frase-del-owner-42"}
+    r = client.post("/auth/event-owners", json=owner, headers=ADMIN)
+    assert r.status_code == 201
+    como_owner = {"X-User-Id": str(r.json()["id"]), "X-User-Role": "event_owner"}
+
+    r = client.patch("/auth/perfil", json={"telefono": "2215559999"}, headers=como_owner)
+    assert r.status_code == 200
+    p = r.json()
+    assert p["telefono"] == "2215559999"
+    assert p["nombre"] is None and p["localidad"] is None and p["provincia"] is None
+
+
 def test_perfil_sin_identidad_responde_401(client):
     assert client.get("/auth/perfil").status_code == 401
 

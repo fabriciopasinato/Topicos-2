@@ -34,9 +34,7 @@ describe("perfil (11.4)", () => {
     await user.click(screen.getByRole("button", { name: "Guardar cambios" }));
 
     expect(await screen.findByText("Datos guardados.")).toBeInTheDocument();
-    expect(enviado.localidad).toBe("Berisso");
-    expect(enviado).not.toHaveProperty("email");
-    expect(enviado).not.toHaveProperty("dni");
+    expect(enviado).toEqual({ localidad: "Berisso" });
   });
 
   test("vaciar el piso envía null; un obligatorio vacío viaja como texto vacío", async () => {
@@ -66,8 +64,49 @@ describe("perfil (11.4)", () => {
         HttpResponse.json({ detail: [{ loc: ["body", "codigo_postal"], msg: "formato inválido" }] }, { status: 422 })),
     );
     const { user } = renderEn("/perfil");
-    await user.click(await screen.findByRole("button", { name: "Guardar cambios" }));
+    const cp = await screen.findByLabelText("Código postal");
+    await user.clear(cp);
+    await user.type(cp, "19");
+    await user.click(screen.getByRole("button", { name: "Guardar cambios" }));
     expect(await screen.findByText("formato inválido")).toBeInTheDocument();
+  });
+
+  test("un owner sin datos de perfil completa solo el teléfono y se guarda", async () => {
+    iniciarSesion("event_owner");
+    const VACIO = {
+      ...PERFIL, rol: "event_owner", email: "owner@example.com", nombre: null, apellido: null, dni: null,
+      fecha_nacimiento: null, telefono: null, calle: null, numero: null, localidad: null, provincia: null,
+      codigo_postal: null,
+    };
+    let enviado = null;
+    server.use(
+      http.get(`${API}/api/auth/perfil`, () => HttpResponse.json(VACIO)),
+      http.patch(`${API}/api/auth/perfil`, async ({ request }) => {
+        enviado = await request.json();
+        return HttpResponse.json({ ...VACIO, ...enviado });
+      }),
+    );
+    const { user } = renderEn("/perfil");
+    await user.type(await screen.findByLabelText("Teléfono"), "2215559999");
+    await user.click(screen.getByRole("button", { name: "Guardar cambios" }));
+    expect(await screen.findByText("Datos guardados.")).toBeInTheDocument();
+    expect(enviado).toEqual({ telefono: "2215559999" });
+  });
+
+  test("sin cambios no llama a la API", async () => {
+    iniciarSesion();
+    let llamadas = 0;
+    server.use(
+      http.get(`${API}/api/auth/perfil`, () => HttpResponse.json(PERFIL)),
+      http.patch(`${API}/api/auth/perfil`, () => {
+        llamadas += 1;
+        return HttpResponse.json(PERFIL);
+      }),
+    );
+    const { user } = renderEn("/perfil");
+    await user.click(await screen.findByRole("button", { name: "Guardar cambios" }));
+    expect(await screen.findByText("No hay cambios para guardar.")).toBeInTheDocument();
+    expect(llamadas).toBe(0);
   });
 });
 

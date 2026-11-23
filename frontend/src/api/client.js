@@ -28,6 +28,23 @@ export const RUTAS_PUBLICAS_AUTH = Object.freeze([
 
 const esPublicaDeAuth = (ruta) => RUTAS_PUBLICAS_AUTH.includes(ruta.split("?")[0]);
 
+/**
+ * Lecturas que tienen sentido sin sesion (cartelera, detalle de un evento,
+ * tipos, recintos y disponibilidad). Si la sesion fue revocada, se repiten
+ * sin token en vez de llevar al login. /api/eventos/mios no esta: el gateway
+ * lo deja pasar sin token, pero sin sesion no hay "mis eventos".
+ */
+const LECTURAS_PUBLICAS = [
+  /^\/api\/eventos$/,
+  /^\/api\/eventos\/(tipos|recintos|\d+)$/,
+  /^\/api\/ventas\/eventos\/\d+\/disponibilidad$/,
+];
+
+export function esLecturaPublica(metodo, ruta) {
+  const camino = ruta.split("?")[0];
+  return metodo === "GET" && LECTURAS_PUBLICAS.some((patron) => patron.test(camino));
+}
+
 const CLAVE = "ticketera.tokens";
 
 function leer() {
@@ -137,7 +154,11 @@ export async function api(ruta, opciones = {}) {
       // El motivo viaja con el cierre: las rutas protegidas redirigen al login
       // mostrando el aviso aunque se adelanten a la navegacion de alFallarAuth.
       borrarTokens("sesion_cerrada");
-      alFallarAuth();
+      if (esLecturaPublica(opciones.method ?? "GET", ruta)) {
+        r = await enviar(ruta, opciones); // ya sin token: la pantalla publica sigue
+      } else {
+        alFallarAuth();
+      }
     }
   }
 
