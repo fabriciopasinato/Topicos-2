@@ -8,6 +8,7 @@ import AdminUsuarios from "./pages/admin/AdminUsuarios.jsx";
 import CambiarContrasenia from "./pages/CambiarContrasenia.jsx";
 import Cartelera from "./pages/Cartelera.jsx";
 import Compras from "./pages/Compras.jsx";
+import AdminDevoluciones from "./pages/AdminDevoluciones.jsx";
 import Evento from "./pages/Evento.jsx";
 import Login from "./pages/Login.jsx";
 import Olvide from "./pages/Olvide.jsx";
@@ -51,6 +52,7 @@ function Encabezado() {
           <>
             {usuario.rol === "administrador" && <Link to="/admin/usuarios">Administración</Link>}
             {ROLES_GESTORES.includes(usuario.rol) && <Link to="/owner">Mis eventos</Link>}
+            {usuario.rol === "administrador" && <Link to="/admin/devoluciones">Devoluciones</Link>}
             <Link to="/compras">Mis compras</Link>
             <Link to="/perfil">Mi perfil</Link>
             <button type="button" className="enlace" onClick={logout}>
@@ -100,6 +102,7 @@ function Rutas() {
           <Route path="/owner" element={<SoloRol roles={ROLES_GESTORES}><MisEventos /></SoloRol>} />
           <Route path="/owner/eventos/nuevo" element={<SoloRol roles={ROLES_GESTORES}><NuevoEvento /></SoloRol>} />
           <Route path="/owner/eventos/:id" element={<SoloRol roles={ROLES_GESTORES}><GestionEvento /></SoloRol>} />
+          <Route path="/admin/devoluciones" element={<SoloRol roles={["administrador"]}><AdminDevoluciones /></SoloRol>} />
           <Route path="*" element={<p>Página no encontrada.</p>} />
         </Routes>
       </main>

@@ -15,11 +15,12 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import insert, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import (
-    ACTIVA, CANCELADA, PAGADA, IdempotencyKey, InventarioEvento, Orden, OrdenItem, Reserva, Ticket,
+    ACTIVA, CANCELADA, DEVOLUCION_PENDIENTE, ESTADOS_DEVOLUCION, PAGADA,
+    Devolucion, IdempotencyKey, InventarioEvento, Orden, OrdenItem, Reserva, Ticket,
 )
 
 # Unica definicion de "disponible": la usan las reservas y la disponibilidad.
@@ -76,6 +77,22 @@ def _exigir_evento_a_la_venta(session: Session, evento_id: int) -> None:
 
 class ReservaPagada(Exception):
     pass
+
+
+class DevolucionYaExiste(Exception):
+    """El item ya tiene una devolucion pendiente o aprobada."""
+
+
+class DevolucionYaResuelta(Exception):
+    """La devolucion ya fue aprobada o rechazada."""
+
+
+class EventoFinalizado(Exception):
+    """El evento ya comenzo y no fue cancelado."""
+
+
+class TicketNoLiberable(Exception):
+    """El ticket ya no esta vendido bajo esa orden."""
 
 
 @dataclass(frozen=True)
@@ -152,8 +169,15 @@ def actualizar_evento(session: Session, evento_id: int, version: int,
 
 # --- Disponibilidad -------------------------------------------------------------
 
-def disponibilidad(session: Session, evento_id: int) -> list[dict]:
-    if session.get(InventarioEvento, evento_id) is None:
+def disponibilidad(session: Session, evento_id: int) -> dict:
+    a_la_venta = session.execute(
+        text(
+            "SELECT (NOT cancelado) AND (fecha_inicio IS NULL OR fecha_inicio > now()) "
+            "FROM inventario_eventos WHERE evento_id = :e"
+        ),
+        {"e": evento_id},
+    ).scalar()
+    if a_la_venta is None:
         raise NoEncontrado()
     filas = session.execute(
         text(
@@ -173,7 +197,7 @@ def disponibilidad(session: Session, evento_id: int) -> list[dict]:
         zona["disponibles"] += int(f.libre)
         if f.tipo_zona == "numerada":
             zona["asientos"].append({"ticket_id": f.id, "fila": f.fila, "numero": f.numero, "disponible": f.libre})
-    return list(zonas.values())
+    return {"evento_id": evento_id, "a_la_venta": bool(a_la_venta), "zonas": list(zonas.values())}
 
 
 # --- Reserva ----------------------------------------------------------------------
@@ -298,11 +322,20 @@ def obtener_reserva(session: Session, reserva_id: int, user_id: int) -> Reserva:
     return reserva
 
 
-def tickets_de_reserva(session: Session, reserva_id: int) -> list[Ticket]:
+def tickets_de_reserva(session: Session, reserva_id: int) -> list:
+    # Para reservas pagadas, orden_items conserva los tickets y precios originales
+    # aunque luego el ticket se devuelva (orden_id = NULL) o se revenda.
+    items = session.execute(
+        select(Ticket.id, Ticket.zona_id, Ticket.tipo_zona, Ticket.fila, Ticket.numero, OrdenItem.precio)
+        .join(OrdenItem, OrdenItem.ticket_id == Ticket.id)
+        .join(Orden, Orden.id == OrdenItem.orden_id)
+        .where(Orden.reserva_id == reserva_id)
+        .order_by(Ticket.id)
+    ).all()
+    if items:
+        return list(items)
     return list(session.scalars(
-        select(Ticket).where((Ticket.reserva_id == reserva_id) | (Ticket.orden_id.in_(
-            select(Orden.id).where(Orden.reserva_id == reserva_id)
-        ))).order_by(Ticket.id)
+        select(Ticket).where(Ticket.reserva_id == reserva_id).order_by(Ticket.id)
     ))
 
 
@@ -393,18 +426,288 @@ def cancelar(session: Session, reserva_id: int, user_id: int) -> None:
 
 def compras_de(session: Session, user_id: int) -> list[dict]:
     ordenes = session.scalars(select(Orden).where(Orden.user_id == user_id).order_by(Orden.id)).all()
-    resultado = []
-    for orden in ordenes:
-        items = session.execute(
-            select(Ticket.id, Ticket.evento_id, Ticket.zona_id, Ticket.fila, Ticket.numero, OrdenItem.precio)
-            .join(OrdenItem, OrdenItem.ticket_id == Ticket.id)
-            .where(OrdenItem.orden_id == orden.id)
-            .order_by(Ticket.id)
+    if not ordenes:
+        return []
+
+    orden_ids = [o.id for o in ordenes]
+    filas_items = session.execute(
+        text(
+            "SELECT oi.id AS orden_item_id, oi.orden_id, t.id AS ticket_id, t.evento_id, "
+            "  t.zona_id, t.tipo_zona, t.fila, t.numero, oi.precio, "
+            "  ie.fecha_inicio AS evento_fecha_inicio, "
+            "  COALESCE(ie.cancelado, FALSE) AS evento_cancelado, "
+            "  CASE "
+            "    WHEN COALESCE(ie.cancelado, FALSE) THEN 'cancelado' "
+            "    WHEN ie.fecha_inicio IS NOT NULL AND ie.fecha_inicio <= now() THEN 'finalizado' "
+            "    ELSE 'activo' "
+            "  END AS evento_estado "
+            "FROM orden_items oi "
+            "JOIN tickets t ON t.id = oi.ticket_id "
+            "LEFT JOIN inventario_eventos ie ON ie.evento_id = t.evento_id "
+            "WHERE oi.orden_id = ANY(:orden_ids) "
+            "ORDER BY oi.orden_id, t.id"
+        ),
+        {"orden_ids": orden_ids},
+    ).all()
+
+    item_ids = [i.orden_item_id for i in filas_items]
+    ultimas_devoluciones: dict[int, dict] = {}
+    if item_ids:
+        filas_dev = session.execute(
+            text(
+                "SELECT DISTINCT ON (orden_item_id) "
+                "  id, orden_item_id, estado, motivo, nota_resolucion, created_at, resuelto_at "
+                "FROM devoluciones "
+                "WHERE orden_item_id = ANY(:item_ids) "
+                "ORDER BY orden_item_id, id DESC"
+            ),
+            {"item_ids": item_ids},
         ).all()
-        resultado.append({
-            "id": orden.id, "reserva_id": orden.reserva_id, "total": float(orden.total),
-            "created_at": orden.created_at,
-            "tickets": [{"ticket_id": i.id, "evento_id": i.evento_id, "zona_id": i.zona_id,
-                         "fila": i.fila, "numero": i.numero, "precio": float(i.precio)} for i in items],
+        ultimas_devoluciones = {
+            d.orden_item_id: {
+                "id": d.id,
+                "estado": d.estado,
+                "motivo": d.motivo,
+                "nota_resolucion": d.nota_resolucion,
+                "created_at": d.created_at,
+                "resuelto_at": d.resuelto_at,
+            }
+            for d in filas_dev
+        }
+
+    items_por_orden: dict[int, list[dict]] = {o.id: [] for o in ordenes}
+    for i in filas_items:
+        items_por_orden[i.orden_id].append({
+            "orden_item_id": i.orden_item_id,
+            "ticket_id": i.ticket_id,
+            "evento_id": i.evento_id,
+            "zona_id": i.zona_id,
+            "tipo_zona": i.tipo_zona,
+            "fila": i.fila,
+            "numero": i.numero,
+            "precio": float(i.precio),
+            "evento_fecha_inicio": i.evento_fecha_inicio,
+            "evento_cancelado": bool(i.evento_cancelado),
+            "evento_estado": i.evento_estado,
+            "devolucion": ultimas_devoluciones.get(i.orden_item_id),
         })
-    return resultado
+
+    return [
+        {
+            "id": orden.id,
+            "reserva_id": orden.reserva_id,
+            "total": float(orden.total),
+            "created_at": orden.created_at,
+            "tickets": items_por_orden[orden.id],
+        }
+        for orden in ordenes
+    ]
+
+
+# --- Devoluciones -------------------------------------------------------------------
+
+def _formatear_devolucion(fila) -> dict:
+    return {
+        "id": fila.id,
+        "orden_item_id": fila.orden_item_id,
+        "orden_id": fila.orden_id,
+        "ticket_id": fila.ticket_id,
+        "user_id": fila.user_id,
+        "evento_id": fila.evento_id,
+        "zona_id": fila.zona_id,
+        "tipo_zona": fila.tipo_zona,
+        "fila": fila.fila,
+        "numero": fila.numero,
+        "precio": float(fila.precio),
+        "estado": fila.estado,
+        "motivo": fila.motivo,
+        "nota_resolucion": fila.nota_resolucion,
+        "resuelto_por": fila.resuelto_por,
+        "resuelto_at": fila.resuelto_at,
+        "created_at": fila.created_at,
+        "evento_fecha_inicio": fila.evento_fecha_inicio,
+        "evento_cancelado": bool(fila.evento_cancelado),
+    }
+
+
+def _detalle_devolucion(session: Session, devolucion_id: int) -> dict:
+    fila = session.execute(
+        text(
+            "SELECT d.id, d.orden_item_id, d.orden_id, d.ticket_id, d.user_id, "
+            "  t.evento_id, t.zona_id, t.tipo_zona, t.fila, t.numero, oi.precio, "
+            "  d.estado, d.motivo, d.nota_resolucion, d.resuelto_por, d.resuelto_at, d.created_at, "
+            "  ie.fecha_inicio AS evento_fecha_inicio, COALESCE(ie.cancelado, FALSE) AS evento_cancelado "
+            "FROM devoluciones d "
+            "JOIN orden_items oi ON oi.id = d.orden_item_id "
+            "JOIN tickets t ON t.id = d.ticket_id "
+            "LEFT JOIN inventario_eventos ie ON ie.evento_id = t.evento_id "
+            "WHERE d.id = :id"
+        ),
+        {"id": devolucion_id},
+    ).first()
+    if fila is None:
+        raise NoEncontrado()
+    return _formatear_devolucion(fila)
+
+
+def solicitar_devolucion(session: Session, user_id: int, orden_item_id: int,
+                         motivo: str | None = None) -> dict:
+    item = session.execute(
+        text(
+            "SELECT oi.id AS orden_item_id, oi.orden_id, oi.ticket_id, t.evento_id, "
+            "  t.estado AS ticket_estado, t.orden_id AS ticket_orden_id "
+            "FROM orden_items oi "
+            "JOIN ordenes o ON o.id = oi.orden_id "
+            "JOIN tickets t ON t.id = oi.ticket_id "
+            "WHERE oi.id = :item_id AND o.user_id = :user_id"
+        ),
+        {"item_id": orden_item_id, "user_id": user_id},
+    ).first()
+    if item is None:
+        raise NoEncontrado()
+
+    # FOR SHARE sobre inventario_eventos para serializar con cancelaciones/reprogramaciones.
+    # Un evento cancelado SIEMPRE permite solicitar devolucion; uno finalizado (no cancelado), no.
+    finalizado = session.execute(
+        text(
+            "SELECT (NOT cancelado) AND (fecha_inicio IS NOT NULL AND fecha_inicio <= now()) "
+            "FROM inventario_eventos WHERE evento_id = :e FOR SHARE"
+        ),
+        {"e": item.evento_id},
+    ).scalar()
+    if finalizado:
+        session.rollback()
+        raise EventoFinalizado()
+
+    motivo_limpio = motivo.strip() if motivo is not None else None
+    if motivo_limpio == "":
+        motivo_limpio = None
+
+    try:
+        creada_id = session.execute(
+            pg_insert(Devolucion)
+            .values(
+                orden_item_id=item.orden_item_id,
+                orden_id=item.orden_id,
+                ticket_id=item.ticket_id,
+                user_id=user_id,
+                estado=DEVOLUCION_PENDIENTE,
+                motivo=motivo_limpio,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["orden_item_id"],
+                index_where=text("estado IN ('pendiente', 'aprobada')"),
+            )
+            .returning(Devolucion.id)
+        ).scalar()
+    except IntegrityError as error:
+        session.rollback()
+        raise DevolucionYaExiste() from error
+
+    if creada_id is None:
+        session.rollback()
+        raise DevolucionYaExiste()
+
+    if item.ticket_estado != "vendido" or item.ticket_orden_id != item.orden_id:
+        session.rollback()
+        raise NoEncontrado()
+
+    session.commit()
+    return _detalle_devolucion(session, creada_id)
+
+
+def listar_devoluciones(session: Session, user_id: int, rol: str, estado: str | None = None) -> list[dict]:
+    if estado is not None and estado not in ESTADOS_DEVOLUCION:
+        raise Invalido("estado de devolucion invalido")
+
+    condiciones = []
+    params: dict = {}
+    if rol == "cliente":
+        condiciones.append("d.user_id = :user_id")
+        params["user_id"] = user_id
+    if estado is not None:
+        condiciones.append("d.estado = :estado")
+        params["estado"] = estado
+
+    where = f"WHERE {' AND '.join(condiciones)} " if condiciones else ""
+    filas = session.execute(
+        text(
+            "SELECT d.id, d.orden_item_id, d.orden_id, d.ticket_id, d.user_id, "
+            "  t.evento_id, t.zona_id, t.tipo_zona, t.fila, t.numero, oi.precio, "
+            "  d.estado, d.motivo, d.nota_resolucion, d.resuelto_por, d.resuelto_at, d.created_at, "
+            "  ie.fecha_inicio AS evento_fecha_inicio, COALESCE(ie.cancelado, FALSE) AS evento_cancelado "
+            "FROM devoluciones d "
+            "JOIN orden_items oi ON oi.id = d.orden_item_id "
+            "JOIN tickets t ON t.id = d.ticket_id "
+            "LEFT JOIN inventario_eventos ie ON ie.evento_id = t.evento_id "
+            f"{where}"
+            "ORDER BY d.created_at DESC, d.id DESC"
+        ),
+        params,
+    ).all()
+    return [_formatear_devolucion(f) for f in filas]
+
+
+def aprobar_devolucion(session: Session, devolucion_id: int, admin_id: int,
+                       nota: str | None = None) -> dict:
+    nota_limpia = nota.strip() if nota is not None else None
+    if nota_limpia == "":
+        nota_limpia = None
+
+    marcada = session.execute(
+        text(
+            "UPDATE devoluciones "
+            "SET estado = 'aprobada', resuelto_por = :admin, nota_resolucion = :nota, resuelto_at = now() "
+            "WHERE id = :id AND estado = 'pendiente' "
+            "RETURNING id, ticket_id, orden_id"
+        ),
+        {"id": devolucion_id, "admin": admin_id, "nota": nota_limpia},
+    ).first()
+    if marcada is None:
+        session.rollback()
+        if session.get(Devolucion, devolucion_id) is None:
+            raise NoEncontrado()
+        raise DevolucionYaResuelta()
+
+    # Libera el ticket: en zona numerada vuelve disponible el asiento exacto;
+    # en zona general vuelve al pool disponible (+1 al cupo de la zona).
+    liberado = session.execute(
+        text(
+            "UPDATE tickets "
+            "SET estado = 'disponible', reserva_id = NULL, reservado_hasta = NULL, orden_id = NULL "
+            "WHERE id = :ticket_id AND orden_id = :orden_id AND estado = 'vendido' "
+            "RETURNING id"
+        ),
+        {"ticket_id": marcada.ticket_id, "orden_id": marcada.orden_id},
+    ).first()
+    if liberado is None:
+        session.rollback()
+        raise TicketNoLiberable()
+
+    session.commit()
+    return _detalle_devolucion(session, devolucion_id)
+
+
+def rechazar_devolucion(session: Session, devolucion_id: int, admin_id: int,
+                        nota: str | None = None) -> dict:
+    nota_limpia = nota.strip() if nota is not None else None
+    if nota_limpia == "":
+        nota_limpia = None
+
+    marcada = session.execute(
+        text(
+            "UPDATE devoluciones "
+            "SET estado = 'rechazada', resuelto_por = :admin, nota_resolucion = :nota, resuelto_at = now() "
+            "WHERE id = :id AND estado = 'pendiente' "
+            "RETURNING id"
+        ),
+        {"id": devolucion_id, "admin": admin_id, "nota": nota_limpia},
+    ).first()
+    if marcada is None:
+        session.rollback()
+        if session.get(Devolucion, devolucion_id) is None:
+            raise NoEncontrado()
+        raise DevolucionYaResuelta()
+
+    session.commit()
+    return _detalle_devolucion(session, devolucion_id)

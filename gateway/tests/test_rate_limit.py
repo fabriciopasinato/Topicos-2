@@ -3,11 +3,24 @@
 import asyncio
 import time
 
+import pytest
 import redis.asyncio as aioredis
 
 from app import rate_limit
 from app.config import Settings
 from tests.conftest import TEST_REDIS_URL, token
+
+
+@pytest.fixture(autouse=True)
+def ventana_fija(monkeypatch):
+    """Fija una ventana futura para que ningun test cruce un cambio de minuto."""
+    ahora_fijo = (int(time.time()) // 60 + 1) * 60 + 10
+    original = rate_limit.consumir
+
+    async def consumir_en_ventana(redis, grupo, ip, limite, ahora=None):
+        return await original(redis, grupo, ip, limite, ahora_fijo if ahora is None else ahora)
+
+    monkeypatch.setattr(rate_limit, "consumir", consumir_en_ventana)
 
 
 def test_limite_general_rechaza_la_solicitud_101(client, servicios):
