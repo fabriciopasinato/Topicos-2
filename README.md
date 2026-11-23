@@ -21,6 +21,7 @@ Solo `frontend` y `gateway` publican puertos. El resto se accede por nombre dent
 ## Requisitos
 
 - Docker Desktop (o Docker Engine) con Docker Compose v2.
+- Python 3.9 o superior, solo para el script de datos de demo (en Windows se corre con `python` o `py`, en vez de `python3`).
 
 ## Primer arranque
 
@@ -38,6 +39,16 @@ Con eso:
 - Administrador inicial: el `ADMIN_EMAIL` / `ADMIN_PASSWORD` del `.env`
 
 `docker compose up -d` es idempotente: crea lo que falta (red, volúmenes, imágenes, contenedores) y reutiliza lo que ya existe. Los contenedores arrancan en orden según su estado de salud: `postgres` y `redis`, luego `auth`, `eventos` y `ventas`, luego `gateway` y `eventos-cron`, luego `frontend`. `eventos-cron` espera solo a `eventos` (que aplica las migraciones de su base), no a `ventas`. Si un servicio se cae, Docker lo reinicia solo.
+
+### Datos de demo
+
+Con el stack levantado:
+
+```bash
+python3 scripts/cargar_datos_demo.py
+```
+
+Carga por la API un event owner y un cliente de demo, 4 recintos y 9 eventos de todos los tipos y estados (publicados, con entradas vendidas, reprogramado, cancelado y borradores). En el evento cancelado deja una devolución pendiente, una aprobada y una rechazada, para ver "Mis compras" y `/admin/devoluciones` con datos. Al final muestra el email y la contraseña de los dos usuarios de demo, para entrar con ellos al front. Son usuarios de prueba con contraseñas fijas, solo para el ambiente local. Va por el gateway y no por SQL para que los eventos publicados lleguen también a ventas. Se puede correr las veces que quieras: los eventos que ya existen se saltean. Si una corrida falla a mitad de camino, el evento que estaba armando queda incompleto y las siguientes lo saltean; en ese caso, empezá de cero con `docker compose down -v` (borra las bases).
 
 ### eventos-cron
 
